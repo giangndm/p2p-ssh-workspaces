@@ -31,7 +31,7 @@ Releases, verifies its SHA-256 checksum, and installs `sshp` to
 `~/.local/bin/sshp`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/giangndm/p2p-ssh-workspaces/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/giangndm/ssh-over-iroh/master/install.sh | bash
 ```
 
 Optional environment variables:
@@ -40,7 +40,7 @@ Optional environment variables:
 - `SSHP_VERSION`: specific release tag such as `v0.1.0` (default: `latest`).
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/giangndm/p2p-ssh-workspaces/master/install.sh | SSHP_INSTALL_DIR=/usr/local/bin bash
+curl -fsSL https://raw.githubusercontent.com/giangndm/ssh-over-iroh/master/install.sh | SSHP_INSTALL_DIR=/usr/local/bin bash
 ```
 
 ## Quick start

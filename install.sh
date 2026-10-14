@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${SSHP_REPO:-giangndm/p2p-ssh-workspaces}"
+REPO="${SSHP_REPO:-giangndm/ssh-over-iroh}"
 BIN_NAME="sshp"
 INSTALL_DIR="${SSHP_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${SSHP_VERSION:-latest}"

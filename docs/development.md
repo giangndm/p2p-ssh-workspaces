@@ -54,6 +54,12 @@ GitHub Actions CI (`.github/workflows/ci.yml`) runs `fmt`, `check`, `clippy`,
 and `test` on every pull request and push to `master`. Branch protection on
 `master` requires all four checks to pass before a pull request can be merged.
 
+Releases are automated via `release-plz` (`release-plz.toml` and
+`.github/workflows/release.yml`): merges to `master` open or update a release
+PR (`release-plz release-pr`) and, when a new version is released
+(`release-plz release`), build and attach `aarch64-apple-darwin` and
+`x86_64-unknown-linux-gnu` archives to the GitHub Release.
+
 ## Test layers
 
 ### Unit tests

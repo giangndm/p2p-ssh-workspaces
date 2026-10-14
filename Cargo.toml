@@ -3,7 +3,7 @@ name = "ssh-workspaces"
 version = "0.1.1"
 edition = "2024"
 description = "P2P iroh pipe for OpenSSH"
-repository = "https://github.com/giangndm/p2p-ssh-workspaces"
+repository = "https://github.com/giangndm/ssh-over-iroh"
 publish = false
 autobins = false
 

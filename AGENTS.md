@@ -35,8 +35,11 @@ All documentation, code comments, and future Git commit messages must use
 concise English. Keep technical names, commands, flags, and protocol values
 unchanged.
 
-When merging pull requests, always use **rebase** (`gh pr merge --rebase`) or
-**squash** (`gh pr merge --squash`). Never create merge commits (`--merge`).
+Do not merge a pull request without explicit human approval. Every pull request
+must either be reviewed by a human or have explicit permission from the human
+user before the agent merges it. When merging pull requests, always use
+**rebase** (`gh pr merge --rebase`) or **squash** (`gh pr merge --squash`).
+Never create merge commits (`--merge`).
 
 ## Required architecture
 

@@ -129,6 +129,7 @@ jobs:
     needs:
       - release-plz-release
       - build
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Download built artifacts

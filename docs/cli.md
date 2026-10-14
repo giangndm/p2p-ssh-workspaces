@@ -43,19 +43,26 @@ between `stdin` and `stdout`.
 
 ## Config mode (OpenSSH `Host` blocks and worker service)
 
+All modifying `sshp config` subcommands (`enable`, `disable`, `install`,
+`uninstall`) print a `git diff`-style unified diff of the modified file to
+`stdout`.
+
 ### Enable a host
 
 ```bash
 sshp config enable <alias> <node-id> [--user <USER>] [--port <PORT>] [--identity-file <PATH>] [--trace]
-sshp config enable <alias> <node-id> --user giang --write
-sshp config enable <alias> <node-id> --write --ssh-config /custom/ssh_config
+sshp config enable <alias> <node-id> --ssh-config /custom/ssh_config
+sshp config enable <alias> <node-id> --dry-run
 ```
 
-Render or atomically write a managed `Host <alias>` block for OpenSSH:
+Atomically writes or updates a managed `Host <alias>` block in `~/.ssh/config`
+(or `--ssh-config`) and prints a unified diff of the change:
 
-- Without `--write`, prints the generated block to `stdout`.
-- With `--write`, inserts or updates the `# BEGIN sshp <alias>` ... `# END sshp <alias>`
-  section in `~/.ssh/config` (or the path given by `--ssh-config`).
+- By default, inserts or updates the `# BEGIN sshp <alias>` ... `# END sshp <alias>`
+  section in `~/.ssh/config` and prints a `git diff`-style unified diff (`---`,
+  `+++`, and `+`/`-` lines).
+- With `--dry-run`, prints only the rendered block to `stdout` without touching
+  disk.
 - `--trace` adds `--trace` to the generated `ProxyCommand`.
 
 ### Disable a host
@@ -66,7 +73,8 @@ sshp config disable <alias> [--ssh-config <PATH>]
 
 Comments out the `ProxyCommand` line inside `# BEGIN sshp <alias>` ... `# END sshp <alias>`
 in `~/.ssh/config` (or `--ssh-config`) while preserving other directives such as
-`User`, `Port`, and `IdentityFile`.
+`User`, `Port`, and `IdentityFile`, and prints a `git diff`-style unified diff of
+the change.
 
 ### Install or uninstall the worker systemd service
 
@@ -75,7 +83,8 @@ sshp config install
 sshp config uninstall
 ```
 
-Manage the Debian/Ubuntu systemd user unit (`sshp-listen.service`).
+Manage the Debian/Ubuntu systemd user unit (`sshp-listen.service`) and print a
+`git diff`-style unified diff of the installed or removed unit file.
 
 ## Trace mode (P2P health probe)
 

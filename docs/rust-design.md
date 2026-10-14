@@ -105,10 +105,11 @@ pub struct SshConfigEntry {
 }
 pub fn upsert_ssh_config(existing: &str, alias: &HostAlias, block: &str) -> AppResult<String>;
 pub fn disable_ssh_config(existing: &str, alias: &HostAlias) -> AppResult<String>;
-pub fn write_ssh_config_entry(path: &Path, entry: &SshConfigEntry) -> AppResult<()>;
-pub fn disable_ssh_config_entry(path: &Path, alias: &HostAlias) -> AppResult<()>;
-pub fn install_service() -> AppResult<()>;
-pub fn uninstall_service() -> AppResult<()>;
+pub fn write_ssh_config_entry(path: &Path, entry: &SshConfigEntry) -> AppResult<String>;
+pub fn disable_ssh_config_entry(path: &Path, alias: &HostAlias) -> AppResult<String>;
+pub fn install_service() -> AppResult<String>;
+pub fn uninstall_service() -> AppResult<String>;
+pub fn format_diff(path: &Path, before: Option<&str>, after: Option<&str>) -> String;
 
 // crate::trace
 pub struct TraceReport {

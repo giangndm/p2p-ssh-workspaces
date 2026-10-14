@@ -63,7 +63,7 @@ Register the worker endpoint in `~/.ssh/config` under a host alias (for example
 `hanoi`) and connect with standard OpenSSH tools:
 
 ```bash
-sshp config enable hanoi <worker-node-id> --user <ssh-user> --write
+sshp config enable hanoi <worker-node-id> --user <ssh-user>
 ssh hanoi
 scp file.txt hanoi:~/
 ```

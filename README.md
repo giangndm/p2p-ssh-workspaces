@@ -20,6 +20,21 @@ Remote-SSH workflows to connect transparently over iroh without any custom
 client config file. On the worker, `sshp config install` and
 `sshp config uninstall` manage the systemd user service.
 
+## Installation
+
+Install the latest release binary (`~/.local/bin/sshp` by default) on macOS
+(`arm64`) or Linux (`x86_64`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/giangndm/p2p-ssh-workspaces/master/install.sh | bash
+```
+
+To customize the install directory or version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/giangndm/p2p-ssh-workspaces/master/install.sh | SSHP_INSTALL_DIR=/usr/local/bin bash
+```
+
 ## Project rules
 
 All documentation, code comments, and future Git commit messages must use

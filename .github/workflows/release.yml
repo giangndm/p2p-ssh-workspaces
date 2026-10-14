@@ -2,21 +2,81 @@ name: Release
 
 on:
   push:
+    branches:
+      - master
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v0.1.0)"
-        required: true
+        description: "Release tag (e.g. v0.1.1)"
+        required: false
         type: string
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
+  release-plz-release:
+    name: Release-plz release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.release-plz.outputs.releases_created }}
+      release_tag: ${{ steps.release-plz.outputs.releases_created == 'true' && fromJSON(steps.release-plz.outputs.releases)[0].tag || '' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz release
+        id: release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-plz-pr:
+    name: Release-plz PR
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz release-pr
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   build:
     name: Build (${{ matrix.target }})
+    needs:
+      - release-plz-release
+    if: |
+      always() && (
+        needs.release-plz-release.outputs.releases_created == 'true' ||
+        startsWith(github.ref, 'refs/tags/v') ||
+        (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+      )
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -31,6 +91,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-plz-release.outputs.release_tag || github.event.inputs.tag || github.ref_name }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -64,7 +126,9 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    needs: build
+    needs:
+      - release-plz-release
+      - build
     runs-on: ubuntu-latest
     steps:
       - name: Download built artifacts
@@ -76,7 +140,7 @@ jobs:
       - name: Create or update GitHub Release and attach binaries
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG_NAME: ${{ needs.release-plz-release.outputs.release_tag || github.event.inputs.tag || github.ref_name }}
         run: |
           ls -la artifacts
           if gh release view "$TAG_NAME" --repo "${{ github.repository }}" >/dev/null 2>&1; then

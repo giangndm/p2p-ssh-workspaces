@@ -1,73 +1,74 @@
 # Configuration
 
-Default file:
+`sshp` does not use a custom TOML configuration file. All client host settings
+live in standard OpenSSH configuration (`~/.ssh/config`).
+
+## Worker state (`sshp listen`)
+
+The worker stores only its persistent 32-byte iroh secret key:
 
 ```text
-~/.config/sshp/config.toml
+~/.config/sshp/worker.key
 ```
 
-Full example:
+When `XDG_CONFIG_HOME` is set to an absolute path, the key is stored at
+`$XDG_CONFIG_HOME/sshp/worker.key`. The file is created atomically with `0600`
+permissions on Unix.
 
-```toml
-[listen]
-backend = "127.0.0.1:22"
+The local SSH backend defaults to `127.0.0.1:22` and can be overridden on the
+command line with `sshp listen --backend <host:port>`.
 
-[host.hanoi]
-node_id = "<worker-endpoint-id>"
-ssh_host = "hanoi"
-startup = ["tmux", "new-session", "-A", "-s", "hanoi"]
-reconnect = true
+## Client OpenSSH config (`~/.ssh/config`)
 
-[host.ide]
-node_id = "<worker-endpoint-id>"
-ssh_host = "ide"
-startup = ["hx", "."]
-reconnect = true
+Generate or update a host entry with `sshp config enable`:
 
-[host.agent]
-node_id = "<worker-endpoint-id>"
-ssh_host = "agent"
-startup = ["herdr", "attach", "workspace-name"]
-reconnect = true
+```bash
+sshp config enable hanoi <worker-endpoint-id> --user giang --write
 ```
 
-## Listen fields
+This writes a managed block into `~/.ssh/config`:
 
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `backend` | No | Local SSH address; default `127.0.0.1:22` |
+```sshconfig
+# BEGIN sshp hanoi
+Host hanoi
+    ProxyCommand '/usr/local/bin/sshp' connect <worker-endpoint-id>
+    User giang
+# END sshp hanoi
+```
 
-The worker secret key is stored beside the config in the config directory by
-default. Protect it with restrictive permissions.
+Re-running `sshp config enable hanoi ... --write` replaces only the
+`# BEGIN sshp hanoi` ... `# END sshp hanoi` section and preserves all other
+entries in `~/.ssh/config`.
 
-`sshp listen` loads and validates the complete config before starting. The
-`--backend` option overrides `[listen].backend` for that invocation.
-If the file is absent, the default backend and identity path are used.
+To disable the iroh `ProxyCommand` for a host while keeping its `User`, `Port`,
+and `IdentityFile` directives intact:
 
-## Host fields
+```bash
+sshp config disable hanoi
+```
 
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `node_id` | Yes | Worker's iroh endpoint ID |
-| `ssh_host` | No | OpenSSH host name; defaults to the alias |
-| `startup` | No | Command and arguments to run after SSH login |
-| `reconnect` | No | Enable reconnect; default `true` |
+### Additional OpenSSH options
 
-`startup` is a string array. The first item is the executable; remaining items
-are arguments. An empty array means the login shell. The schema does not use a
-single command string because arrays preserve argument boundaries.
-
-## OpenSSH config
-
-Keep SSH options in `~/.ssh/config`:
+Because `sshp` is a standard `ProxyCommand` pipe, you can use any native
+OpenSSH directive in `~/.ssh/config` (such as `ServerAliveInterval`,
+`IdentityFile`, `LocalForward`, or `RemoteCommand` for tmux/Helix/Herdr):
 
 ```sshconfig
 Host hanoi
+    ProxyCommand '/usr/local/bin/sshp' connect <worker-endpoint-id>
     User giang
     IdentityFile ~/.ssh/id_ed25519
     ServerAliveInterval 10
     ServerAliveCountMax 3
+    RequestTTY yes
+    RemoteCommand tmux new-session -A -s hanoi
 ```
 
-`sshp connect` does not reparse the full OpenSSH config. OpenSSH handles these
-options.
+Once configured, standard tools work transparently:
+
+```bash
+ssh hanoi
+scp file.txt hanoi:~/
+sftp hanoi
+rsync -avz ./dir hanoi:~/
+```

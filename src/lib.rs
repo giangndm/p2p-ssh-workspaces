@@ -1,8 +1,11 @@
 //! Minimal iroh-backed SSH workspace library.
 //!
-//! The crate intentionally exposes only the three design boundaries required
-//! by the application: shared values, listen mode, and connect mode.
+//! Each top-level CLI subcommand maps to one module (`listen`, `connect`,
+//! `config`, and `trace`), sharing common types and transport primitives from
+//! `shared`.
 
+pub mod config;
 pub mod connect;
 pub mod listen;
 pub mod shared;
+pub mod trace;

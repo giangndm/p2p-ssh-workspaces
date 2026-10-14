@@ -39,7 +39,7 @@ impl Drop for TempDir {
 }
 
 #[test]
-fn help_is_available_from_the_binary() {
+fn help_lists_all_four_subcommands() {
     let output = Command::new(env!("CARGO_BIN_EXE_sshp"))
         .arg("--help")
         .output()
@@ -49,26 +49,95 @@ fn help_is_available_from_the_binary() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("listen"));
     assert!(stdout.contains("connect"));
+    assert!(stdout.contains("config"));
+    assert!(stdout.contains("trace"));
 }
 
 #[test]
-fn connect_reports_an_unknown_alias_with_isolated_config() {
-    let config_dir = TempDir::new();
-    let sshp_dir = config_dir.path().join("sshp");
-    fs::create_dir(&sshp_dir).expect("create sshp config directory");
-    let node_id = iroh::SecretKey::from([7; 32]).public();
-    fs::write(
-        sshp_dir.join("config.toml"),
-        format!("[host.present]\nnode_id = \"{node_id}\"\n"),
-    )
-    .expect("write temporary config");
-    let output = Command::new(env!("CARGO_BIN_EXE_sshp"))
-        .args(["connect", "missing"])
-        .env("XDG_CONFIG_HOME", config_dir.path())
-        .output()
-        .expect("run sshp connect");
+fn config_enables_and_disables_managed_ssh_config_block() {
+    let temp = TempDir::new();
+    let ssh_config = temp.path().join(".ssh").join("config");
+    let node_id = iroh::SecretKey::from([7; 32]).public().to_string();
 
-    assert!(!output.status.success());
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unknown host alias"));
+    let render_output = Command::new(env!("CARGO_BIN_EXE_sshp"))
+        .args([
+            "config", "enable", "hanoi", &node_id, "--user", "giang", "--trace",
+        ])
+        .output()
+        .expect("run sshp config enable");
+
+    assert!(render_output.status.success());
+    let stdout = String::from_utf8_lossy(&render_output.stdout);
+    assert!(stdout.contains("Host hanoi"));
+    assert!(stdout.contains(&format!("connect --trace {node_id}")));
+    assert!(stdout.contains("User giang"));
+
+    let write_output = Command::new(env!("CARGO_BIN_EXE_sshp"))
+        .args([
+            "config",
+            "enable",
+            "hanoi",
+            &node_id,
+            "--user",
+            "giang",
+            "--trace",
+            "--write",
+            "--ssh-config",
+        ])
+        .arg(&ssh_config)
+        .output()
+        .expect("run sshp config enable --write");
+
+    assert!(write_output.status.success());
+    let written = fs::read_to_string(&ssh_config).expect("read written ssh config");
+    assert_eq!(written, stdout);
+
+    let disable_output = Command::new(env!("CARGO_BIN_EXE_sshp"))
+        .args(["config", "disable", "hanoi", "--ssh-config"])
+        .arg(&ssh_config)
+        .output()
+        .expect("run sshp config disable");
+
+    assert!(disable_output.status.success());
+    let disabled = fs::read_to_string(&ssh_config).expect("read disabled ssh config");
+    assert!(disabled.contains("Host hanoi"));
+    assert!(disabled.contains("    # ProxyCommand "));
+    assert!(disabled.contains("    User giang"));
+}
+
+#[test]
+fn connect_and_trace_reject_invalid_endpoint_ids_before_network() {
+    for subcommand in ["connect", "trace"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_sshp"))
+            .args([subcommand, "not-an-endpoint-id"])
+            .output()
+            .expect("run sshp with invalid node id");
+
+        assert!(!output.status.success());
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("invalid endpoint ID"), "{stderr}");
+    }
+}
+
+#[test]
+fn print_id_creates_and_reuses_persistent_worker_key() {
+    let temp = TempDir::new();
+    let first = Command::new(env!("CARGO_BIN_EXE_sshp"))
+        .args(["listen", "--print-id"])
+        .env("XDG_CONFIG_HOME", temp.path())
+        .output()
+        .expect("first sshp listen --print-id");
+    let second = Command::new(env!("CARGO_BIN_EXE_sshp"))
+        .args(["listen", "--print-id"])
+        .env("XDG_CONFIG_HOME", temp.path())
+        .output()
+        .expect("second sshp listen --print-id");
+
+    assert!(first.status.success());
+    assert!(second.status.success());
+    let first_id = String::from_utf8_lossy(&first.stdout).trim().to_owned();
+    let second_id = String::from_utf8_lossy(&second.stdout).trim().to_owned();
+    assert!(!first_id.is_empty());
+    assert_eq!(first_id, second_id);
+    assert!(temp.path().join("sshp").join("worker.key").exists());
 }

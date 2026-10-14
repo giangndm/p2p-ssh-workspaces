@@ -1,7 +1,7 @@
 # CLI contract
 
-> Status: listen, connect, and systemd user-service runtime are implemented.
-> Full integration verification remains staged.
+> Status: `listen`, `connect`, `config`, and `trace` are implemented. Full
+> network integration verification remains staged.
 
 The executable is `sshp`.
 
@@ -11,63 +11,86 @@ The executable is `sshp`.
 sshp listen
 ```
 
-Run in the foreground and log the endpoint ID, peer-limit events, and backend
-errors. The command reads `[listen]` from the default config; `--backend`
-overrides it. The complete config is validated; if the file is absent, default
-backend and identity paths are used.
+Run in the foreground and log the persistent endpoint ID, peer-limit events,
+and backend errors to `stderr`. By default, `sshp listen` forwards streams to
+`127.0.0.1:22` and persists the worker secret key at
+`~/.config/sshp/worker.key` (or `$XDG_CONFIG_HOME/sshp/worker.key`).
 
 ```bash
 sshp listen --backend 127.0.0.1:22
+sshp listen --trace
 sshp listen --print-id
-sshp listen --install-service
-sshp listen --uninstall-service
 ```
 
-`--install-service` and `--uninstall-service` are lifecycle actions inside
-listen mode. They do not create another top-level mode.
+- `--backend <ADDR>` overrides the local TCP backend address.
+- `--trace` logs accepted peer IDs and per-session byte counts to `stderr`.
+- `--print-id` prints the persistent endpoint ID to `stdout` and exits.
 
-## Connect mode
+## Connect mode (`ProxyCommand` pipe)
 
 ```bash
-sshp connect <alias>
+sshp connect <node-id>
+sshp connect --trace <node-id>
 ```
 
-`sshp` uses the alias to read the endpoint ID, then runs the system `ssh` with
-the host's OpenSSH config.
+This command is invoked by OpenSSH `ProxyCommand`. It creates an ephemeral iroh
+endpoint, connects to `<node-id>` using ALPN `sshp/1`, and bridges raw bytes
+between `stdin` and `stdout`.
 
-Pass SSH arguments after `--`:
+- `stdout` is reserved strictly for the SSH byte stream.
+- Diagnostics and `--trace` connection/transfer metrics are written to `stderr`
+  only.
+
+## Config mode (OpenSSH `Host` blocks and worker service)
+
+### Enable a host
 
 ```bash
-sshp connect hanoi -- -L 8080:127.0.0.1:8080
-sshp connect hanoi -- -i ~/.ssh/work_key
+sshp config enable <alias> <node-id> [--user <USER>] [--port <PORT>] [--identity-file <PATH>] [--trace]
+sshp config enable <alias> <node-id> --user giang --write
+sshp config enable <alias> <node-id> --write --ssh-config /custom/ssh_config
 ```
 
-Pass `sshp` options before `--`:
+Render or atomically write a managed `Host <alias>` block for OpenSSH:
+
+- Without `--write`, prints the generated block to `stdout`.
+- With `--write`, inserts or updates the `# BEGIN sshp <alias>` ... `# END sshp <alias>`
+  section in `~/.ssh/config` (or the path given by `--ssh-config`).
+- `--trace` adds `--trace` to the generated `ProxyCommand`.
+
+### Disable a host
 
 ```bash
-sshp connect hanoi --no-reconnect
+sshp config disable <alias> [--ssh-config <PATH>]
 ```
 
-## Internal stdio path
+Comments out the `ProxyCommand` line inside `# BEGIN sshp <alias>` ... `# END sshp <alias>`
+in `~/.ssh/config` (or `--ssh-config`) while preserving other directives such as
+`User`, `Port`, and `IdentityFile`.
+
+### Install or uninstall the worker systemd service
 
 ```bash
-sshp connect --stdio <alias>
+sshp config install
+sshp config uninstall
 ```
 
-This path is for ProxyCommand. It does not create an interactive terminal. It
-reads stdin, connects to iroh, and writes data to stdout. Use stderr only for
-diagnostics.
+Manage the Debian/Ubuntu systemd user unit (`sshp-listen.service`).
 
-## Exit behavior
+## Trace mode (P2P health probe)
 
-- Preserve the SSH exit code on normal completion.
-- A clean SSH exit does not trigger reconnect.
-- OpenSSH exit code `255` triggers retry when the host has reconnect enabled.
-  OpenSSH does not distinguish authentication failures from other `255`
-  failures, so those may be retried too.
-- `--no-reconnect` disables retry for the current invocation.
-- `Ctrl-C` stops SSH or cancels reconnect and returns control to the terminal.
+```bash
+sshp trace <node-id>
+```
 
-Reconnect uses a one-second fixed delay with a 100 ms minimum and 16 retries,
-capped at 64 by the policy and 60 seconds by the delay bound. A clean remote
-exit and other non-255 exit codes are returned without retry.
+Bind an ephemeral iroh endpoint, connect to `<node-id>` using ALPN `sshp/1`,
+open and close a bidirectional stream, and print latency diagnostics to `stdout`:
+
+```text
+local_id: <local-endpoint-id>
+target_id: <target-endpoint-id>
+alpn: sshp/1
+handshake_ms: 42
+stream_open_ms: 1
+status: ok
+```

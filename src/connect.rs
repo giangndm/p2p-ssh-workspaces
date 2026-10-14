@@ -1,178 +1,28 @@
-//! Access/connect mode.
+//! Access/connect stdio pipe for OpenSSH `ProxyCommand` (`sshp connect`).
 
-use std::{
-    ffi::{OsStr, OsString},
-    path::PathBuf,
-};
+use std::time::Instant;
 
 use tokio::io::{AsyncRead, AsyncWrite, stdin, stdout};
 
 use crate::shared::{
-    AppResult, ArgumentError, HostAlias, HostConfig, IrohEndpoint, NodeId, PeerTransport, SshHost,
-    StartupCommand, StreamParts, bridge,
+    AppResult, BridgeStats, IrohEndpoint, NodeId, PeerTransport, StreamParts, bridge,
 };
 
-#[path = "connect/retry.rs"]
-mod retry;
-pub use retry::RetryPolicy;
-use retry::{OpenSshRunner, SessionRunner, run_ssh};
-
-/// OpenSSH invocation data.
-pub struct SshCommand {
-    /// SSH host name passed to OpenSSH.
-    pub host: SshHost,
-    /// Optional remote startup command.
-    pub startup: Option<StartupCommand>,
-    /// Extra OpenSSH arguments.
-    pub ssh_args: Vec<OsString>,
-    /// Hidden stdio proxy command.
-    pub proxy: ProxyCommand,
-}
-
-impl SshCommand {
-    /// Build an OpenSSH command description for one configured host.
-    pub fn new(
-        alias: HostAlias,
-        host: HostConfig,
-        ssh_args: Vec<OsString>,
-        proxy_executable: PathBuf,
-    ) -> Self {
-        Self {
-            host: host.ssh_host,
-            startup: host.startup,
-            ssh_args,
-            proxy: ProxyCommand {
-                executable: proxy_executable,
-                args: vec![
-                    OsString::from("connect"),
-                    OsString::from("--stdio"),
-                    OsString::from(alias.as_ref()),
-                ],
-            },
-        }
+/// Bridge OpenSSH `ProxyCommand` stdio to one worker iroh stream.
+pub async fn connect_stdio(node_id: NodeId, trace: bool) -> AppResult<()> {
+    let endpoint = IrohEndpoint::bind_ephemeral().await?;
+    if trace {
+        eprintln!("sshp connect: local endpoint {}", endpoint.id());
+        eprintln!("sshp connect: connecting to {node_id}");
     }
-
-    /// Return the argv passed to OpenSSH.
-    pub fn argv(&self) -> AppResult<Vec<OsString>> {
-        let mut args = self.ssh_args.clone();
-        args.push(OsString::from("-o"));
-        args.push(OsString::from(format!(
-            "ProxyCommand={}",
-            self.proxy.shell_command()?
-        )));
-        args.push(OsString::from(self.host.as_ref()));
-        if let Some(startup) = &self.startup {
-            args.push(OsString::from(shell_command(startup)?));
-        }
-        Ok(args)
+    let stats = run_proxy(&endpoint, node_id, stdin(), stdout(), trace).await?;
+    if trace {
+        eprintln!(
+            "sshp connect: closed {node_id} (tx={}B, rx={}B)",
+            stats.left_to_right, stats.right_to_left
+        );
     }
-}
-
-/// OpenSSH ProxyCommand invocation.
-pub struct ProxyCommand {
-    /// Proxy executable path.
-    pub executable: PathBuf,
-    /// Proxy arguments.
-    pub args: Vec<OsString>,
-}
-
-impl ProxyCommand {
-    fn shell_command(&self) -> AppResult<String> {
-        let executable = self.executable.to_str().ok_or_else(|| {
-            ArgumentError::Invalid("proxy executable must be valid UTF-8".to_owned())
-        })?;
-        let mut words = vec![shell_quote(executable)?];
-        for arg in &self.args {
-            let arg = arg.to_str().ok_or_else(|| {
-                ArgumentError::Invalid("proxy argument must be valid UTF-8".to_owned())
-            })?;
-            words.push(shell_quote(arg)?);
-        }
-        Ok(words.join(" "))
-    }
-}
-
-fn shell_command(startup: &StartupCommand) -> AppResult<String> {
-    let mut words = vec![shell_quote(&startup.program)?];
-    for arg in &startup.args {
-        words.push(shell_quote(arg)?);
-    }
-    Ok(words.join(" "))
-}
-
-fn shell_quote(value: &str) -> Result<String, ArgumentError> {
-    if value.contains('\0') {
-        return Err(ArgumentError::Invalid(
-            "shell argument must not contain NUL".to_owned(),
-        ));
-    }
-    Ok(format!("'{}'", value.replace('\'', "'\"'\"'")))
-}
-
-/// Access-side connection supervisor.
-pub struct Connector {
-    endpoint: Option<IrohEndpoint>,
-    retry: RetryPolicy,
-}
-
-impl Connector {
-    /// Create a connector for an interactive SSH session.
-    pub fn new(retry: RetryPolicy) -> Self {
-        Self {
-            endpoint: None,
-            retry,
-        }
-    }
-
-    /// Create a connector for an OpenSSH stdio proxy.
-    pub fn with_endpoint(endpoint: IrohEndpoint, retry: RetryPolicy) -> Self {
-        Self {
-            endpoint: Some(endpoint),
-            retry,
-        }
-    }
-
-    /// Run one interactive SSH session and apply reconnect policy.
-    pub async fn run(
-        &self,
-        alias: HostAlias,
-        host: HostConfig,
-        ssh_args: Vec<OsString>,
-    ) -> AppResult<i32> {
-        self.run_with_runner(alias, host, ssh_args, &OpenSshRunner)
-            .await
-    }
-
-    async fn run_with_runner<R>(
-        &self,
-        alias: HostAlias,
-        host: HostConfig,
-        ssh_args: Vec<OsString>,
-        runner: &R,
-    ) -> AppResult<i32>
-    where
-        R: SessionRunner,
-    {
-        let reconnect = host.reconnect && self.retry.enabled;
-        let proxy_executable = std::env::current_exe()?;
-        let command = SshCommand::new(alias, host, ssh_args, proxy_executable);
-        let argv = command.argv()?;
-        let retry = RetryPolicy {
-            enabled: reconnect,
-            max_delay: self.retry.max_delay,
-            max_retries: self.retry.max_retries,
-        };
-        run_ssh(runner, OsStr::new("ssh"), &argv, &retry).await
-    }
-
-    /// Bridge OpenSSH stdio to one iroh stream.
-    pub async fn run_stdio_proxy(&self, node_id: NodeId) -> AppResult<()> {
-        let endpoint = self
-            .endpoint
-            .as_ref()
-            .ok_or_else(|| std::io::Error::other("stdio proxy requires an iroh endpoint"))?;
-        run_proxy(endpoint, node_id, stdin(), stdout()).await
-    }
+    Ok(())
 }
 
 pub(crate) async fn run_proxy<T, Input, Output>(
@@ -180,14 +30,22 @@ pub(crate) async fn run_proxy<T, Input, Output>(
     node_id: NodeId,
     input: Input,
     output: Output,
-) -> AppResult<()>
+    trace: bool,
+) -> AppResult<BridgeStats>
 where
     T: PeerTransport,
     Input: AsyncRead + Unpin + Send,
     Output: AsyncWrite + Unpin + Send,
 {
+    let start = Instant::now();
     let remote = transport.connect(&node_id).await?;
-    bridge(
+    if trace {
+        eprintln!(
+            "sshp connect: connected to {node_id} in {}ms",
+            start.elapsed().as_millis()
+        );
+    }
+    let stats = bridge(
         StreamParts {
             reader: input,
             writer: output,
@@ -195,9 +53,155 @@ where
         remote,
     )
     .await?;
-    Ok(())
+    Ok(stats)
 }
 
 #[cfg(test)]
-#[path = "connect/tests.rs"]
-mod tests;
+mod tests {
+    use std::sync::Mutex;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream, ReadHalf, WriteHalf};
+
+    use super::*;
+
+    fn valid_node_id() -> NodeId {
+        iroh::SecretKey::from([7; 32])
+            .public()
+            .to_string()
+            .parse()
+            .expect("valid node id")
+    }
+
+    type MemoryParts = StreamParts<ReadHalf<DuplexStream>, WriteHalf<DuplexStream>>;
+
+    struct FakeTransport {
+        stream: Mutex<Option<MemoryParts>>,
+        expected_peer: NodeId,
+    }
+
+    impl FakeTransport {
+        fn new(stream: DuplexStream, expected_peer: NodeId) -> Self {
+            let (reader, writer) = tokio::io::split(stream);
+            Self {
+                stream: Mutex::new(Some(StreamParts { reader, writer })),
+                expected_peer,
+            }
+        }
+    }
+
+    impl PeerTransport for FakeTransport {
+        type Reader = ReadHalf<DuplexStream>;
+        type Writer = WriteHalf<DuplexStream>;
+
+        async fn connect(&self, peer: &NodeId) -> AppResult<MemoryParts> {
+            assert_eq!(peer, &self.expected_peer);
+            self.stream
+                .lock()
+                .expect("fake transport lock")
+                .take()
+                .ok_or_else(|| std::io::Error::other("fake peer is unavailable").into())
+        }
+
+        async fn accept(&self) -> AppResult<(NodeId, MemoryParts)> {
+            Err(std::io::Error::other("fake accept is unused").into())
+        }
+    }
+
+    #[tokio::test]
+    async fn forwards_stdio_in_both_directions() {
+        let (mut input, proxy_input) = tokio::io::duplex(1024);
+        let (proxy_output, mut output) = tokio::io::duplex(1024);
+        let (mut remote_writer, proxy_remote_read) = tokio::io::duplex(1024);
+        let (proxy_remote_write, mut remote_reader) = tokio::io::duplex(1024);
+        let proxy_task = tokio::spawn(bridge(
+            StreamParts {
+                reader: proxy_input,
+                writer: proxy_output,
+            },
+            StreamParts {
+                reader: proxy_remote_read,
+                writer: proxy_remote_write,
+            },
+        ));
+
+        input.write_all(b"ping").await.expect("input write");
+        input.shutdown().await.expect("input shutdown");
+        remote_writer
+            .write_all(b"pong")
+            .await
+            .expect("remote write");
+        remote_writer.shutdown().await.expect("remote shutdown");
+
+        let mut request = Vec::new();
+        remote_reader
+            .read_to_end(&mut request)
+            .await
+            .expect("remote read");
+        let mut response = Vec::new();
+        output
+            .read_to_end(&mut response)
+            .await
+            .expect("output read");
+
+        let stats = proxy_task.await.expect("proxy task").expect("proxy");
+        assert_eq!(request, b"ping");
+        assert_eq!(response, b"pong");
+        assert_eq!(stats.left_to_right, 4);
+        assert_eq!(stats.right_to_left, 4);
+    }
+
+    #[tokio::test]
+    async fn runs_full_proxy_and_backend_flow_in_memory() {
+        let (mut session, proxy_session) = tokio::io::duplex(1024);
+        let (proxy_peer, worker_peer) = tokio::io::duplex(1024);
+        let (worker_backend, mut backend) = tokio::io::duplex(1024);
+        let transport = FakeTransport::new(proxy_peer, valid_node_id());
+        let (session_reader, session_writer) = tokio::io::split(proxy_session);
+        let (worker_reader, worker_writer) = tokio::io::split(worker_peer);
+        let (backend_reader, backend_writer) = tokio::io::split(worker_backend);
+
+        let worker_task = tokio::spawn(bridge(
+            StreamParts {
+                reader: worker_reader,
+                writer: worker_writer,
+            },
+            StreamParts {
+                reader: backend_reader,
+                writer: backend_writer,
+            },
+        ));
+        let (proxy_result, (request, response)) = tokio::join!(
+            run_proxy(
+                &transport,
+                valid_node_id(),
+                session_reader,
+                session_writer,
+                true
+            ),
+            async {
+                session.write_all(b"ping").await.expect("session write");
+                session.shutdown().await.expect("session shutdown");
+                let mut request = Vec::new();
+                backend
+                    .read_to_end(&mut request)
+                    .await
+                    .expect("backend read");
+                backend.write_all(b"pong").await.expect("backend write");
+                backend.shutdown().await.expect("backend shutdown");
+
+                let mut response = Vec::new();
+                session
+                    .read_to_end(&mut response)
+                    .await
+                    .expect("session read");
+                (request, response)
+            }
+        );
+        assert_eq!(request, b"ping");
+        assert_eq!(response, b"pong");
+        let stats = proxy_result.expect("proxy");
+        assert_eq!(stats.left_to_right, 4);
+        assert_eq!(stats.right_to_left, 4);
+        worker_task.await.expect("worker task").expect("worker");
+    }
+}

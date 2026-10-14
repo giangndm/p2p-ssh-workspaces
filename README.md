@@ -22,17 +22,60 @@ client config file. On the worker, `sshp config install` and
 
 ## Installation
 
-Install the latest release binary (`~/.local/bin/sshp` by default) on macOS
-(`arm64`) or Linux (`x86_64`):
+### One-line install (macOS & Linux)
+
+Run the install script with `bash`. It automatically detects your OS and
+architecture (`macOS arm64` -> `aarch64-apple-darwin`, `Linux x86_64` ->
+`x86_64-unknown-linux-gnu`), downloads the latest release binary from GitHub
+Releases, verifies its SHA-256 checksum, and installs `sshp` to
+`~/.local/bin/sshp`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/giangndm/p2p-ssh-workspaces/master/install.sh | bash
 ```
 
-To customize the install directory or version:
+Optional environment variables:
+
+- `SSHP_INSTALL_DIR`: custom install directory (default: `~/.local/bin`).
+- `SSHP_VERSION`: specific release tag such as `v0.1.0` (default: `latest`).
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/giangndm/p2p-ssh-workspaces/master/install.sh | SSHP_INSTALL_DIR=/usr/local/bin bash
+```
+
+## Quick start
+
+### 1. On the remote worker (server / workstation running `sshd`)
+
+Print the worker's persistent endpoint ID and start listening (or install the
+background systemd user service on Linux):
+
+```bash
+sshp listen --print-id
+sshp listen
+# Or install and start the systemd user service on Debian/Ubuntu:
+sshp config install
+```
+
+### 2. On the client machine (macOS / Linux)
+
+Register the worker endpoint in `~/.ssh/config` under a host alias (for example
+`hanoi`) and connect with standard OpenSSH tools:
+
+```bash
+sshp config enable hanoi <worker-node-id> --user <ssh-user> --write
+ssh hanoi
+scp file.txt hanoi:~/
+```
+
+Other helpful commands:
+
+```bash
+# Probe P2P connectivity and measure handshake latency:
+sshp trace <worker-node-id>
+
+# Temporarily disable the iroh ProxyCommand for a host while keeping User/Port/IdentityFile:
+sshp config disable hanoi
 ```
 
 ## Project rules

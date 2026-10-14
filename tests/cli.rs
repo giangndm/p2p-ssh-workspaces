@@ -54,25 +54,12 @@ fn help_lists_all_four_subcommands() {
 }
 
 #[test]
-fn config_enables_and_disables_managed_ssh_config_block() {
+fn config_enables_and_disables_managed_ssh_config_block_with_log_output() {
     let temp = TempDir::new();
     let ssh_config = temp.path().join(".ssh").join("config");
     let node_id = iroh::SecretKey::from([7; 32]).public().to_string();
 
-    let render_output = Command::new(env!("CARGO_BIN_EXE_sshp"))
-        .args([
-            "config", "enable", "hanoi", &node_id, "--user", "giang", "--trace",
-        ])
-        .output()
-        .expect("run sshp config enable");
-
-    assert!(render_output.status.success());
-    let stdout = String::from_utf8_lossy(&render_output.stdout);
-    assert!(stdout.contains("Host hanoi"));
-    assert!(stdout.contains(&format!("connect --trace {node_id}")));
-    assert!(stdout.contains("User giang"));
-
-    let write_output = Command::new(env!("CARGO_BIN_EXE_sshp"))
+    let dry_run_output = Command::new(env!("CARGO_BIN_EXE_sshp"))
         .args([
             "config",
             "enable",
@@ -81,16 +68,41 @@ fn config_enables_and_disables_managed_ssh_config_block() {
             "--user",
             "giang",
             "--trace",
-            "--write",
+            "--dry-run",
+        ])
+        .output()
+        .expect("run sshp config enable --dry-run");
+
+    assert!(dry_run_output.status.success());
+    let rendered_block = String::from_utf8_lossy(&dry_run_output.stdout);
+    assert!(rendered_block.contains("Host hanoi"));
+    assert!(rendered_block.contains(&format!("connect --trace {node_id}")));
+    assert!(rendered_block.contains("User giang"));
+
+    let enable_output = Command::new(env!("CARGO_BIN_EXE_sshp"))
+        .args([
+            "config",
+            "enable",
+            "hanoi",
+            &node_id,
+            "--user",
+            "giang",
+            "--trace",
             "--ssh-config",
         ])
         .arg(&ssh_config)
         .output()
-        .expect("run sshp config enable --write");
+        .expect("run sshp config enable");
 
-    assert!(write_output.status.success());
+    assert!(enable_output.status.success());
+    let enable_stdout = String::from_utf8_lossy(&enable_output.stdout);
+    assert!(enable_stdout.contains("--- /dev/null\n"));
+    assert!(enable_stdout.contains(&format!("+++ b{}\n", ssh_config.display())));
+    assert!(enable_stdout.contains("+# BEGIN sshp hanoi\n"));
+    assert!(enable_stdout.contains("+Host hanoi\n"));
+    assert!(enable_stdout.contains("+    User giang\n"));
     let written = fs::read_to_string(&ssh_config).expect("read written ssh config");
-    assert_eq!(written, stdout);
+    assert_eq!(written, rendered_block);
 
     let disable_output = Command::new(env!("CARGO_BIN_EXE_sshp"))
         .args(["config", "disable", "hanoi", "--ssh-config"])
@@ -99,7 +111,12 @@ fn config_enables_and_disables_managed_ssh_config_block() {
         .expect("run sshp config disable");
 
     assert!(disable_output.status.success());
+    let disable_stdout = String::from_utf8_lossy(&disable_output.stdout);
     let disabled = fs::read_to_string(&ssh_config).expect("read disabled ssh config");
+    assert!(disable_stdout.contains(&format!("--- a{}\n", ssh_config.display())));
+    assert!(disable_stdout.contains(&format!("+++ b{}\n", ssh_config.display())));
+    assert!(disable_stdout.contains("-    ProxyCommand "));
+    assert!(disable_stdout.contains("+    # ProxyCommand "));
     assert!(disabled.contains("Host hanoi"));
     assert!(disabled.contains("    # ProxyCommand "));
     assert!(disabled.contains("    User giang"));

@@ -241,48 +241,67 @@ pub fn disable_ssh_config(existing: &str, alias: &HostAlias) -> AppResult<String
     Ok(format!("{}\n", output.join("\n")))
 }
 
-/// Atomically write or update a managed `Host` block in an OpenSSH config file.
-pub fn write_ssh_config_entry(path: &Path, entry: &SshConfigEntry) -> AppResult<()> {
+/// Atomically write or update a managed `Host` block in an OpenSSH config file
+/// and return a unified diff of the change.
+pub fn write_ssh_config_entry(path: &Path, entry: &SshConfigEntry) -> AppResult<String> {
     let block = entry.render()?;
     let existing = match fs::read_to_string(path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
+        Ok(contents) => Some(contents),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
         Err(error) => return Err(error.into()),
     };
-    let updated = upsert_ssh_config(&existing, &entry.alias, &block)?;
-    write_file_atomic(path, updated.as_bytes(), true)
+    let old_block = existing
+        .as_deref()
+        .and_then(|contents| extract_managed_block(contents, &entry.alias));
+    let updated = upsert_ssh_config(existing.as_deref().unwrap_or(""), &entry.alias, &block)?;
+    write_file_atomic(path, updated.as_bytes(), true)?;
+    let before = match (&existing, &old_block) {
+        (None, _) => None,
+        (Some(_), Some(previous)) => Some(previous.as_str()),
+        (Some(_), None) => Some(""),
+    };
+    Ok(format_diff(path, before, Some(&block)))
 }
 
-/// Atomically comment out `ProxyCommand` for a managed `Host` block in an OpenSSH config file.
-pub fn disable_ssh_config_entry(path: &Path, alias: &HostAlias) -> AppResult<()> {
+/// Atomically comment out `ProxyCommand` for a managed `Host` block in an OpenSSH config file
+/// and return a unified diff of the change.
+pub fn disable_ssh_config_entry(path: &Path, alias: &HostAlias) -> AppResult<String> {
     let existing = fs::read_to_string(path)?;
     let updated = disable_ssh_config(&existing, alias)?;
-    write_file_atomic(path, updated.as_bytes(), true)
+    let old_block = extract_managed_block(&existing, alias);
+    let new_block = extract_managed_block(&updated, alias);
+    write_file_atomic(path, updated.as_bytes(), true)?;
+    Ok(format_diff(
+        path,
+        old_block.as_deref(),
+        new_block.as_deref(),
+    ))
 }
 
-/// Render and install the systemd user unit (`sshp-listen.service`).
-pub fn install_service() -> AppResult<()> {
+/// Render and install the systemd user unit (`sshp-listen.service`),
+/// returning a unified diff of the unit file change.
+pub fn install_service() -> AppResult<String> {
     let executable = std::env::current_exe()?;
     if !executable.is_absolute() {
-        return Err(AppError::Service(Box::new(std::io::Error::other(
-            "service executable must be an absolute path",
-        ))));
+        return Err(service_error("service executable must be an absolute path"));
     }
     let config_dir = default_config_base_dir()?;
     let unit_path = default_service_unit_path()?;
+    let existing = read_owned_unit(&unit_path)?;
     let unit = render_unit(&executable, &config_dir)?;
 
     run_systemctl(["show", "--property=Version", "--value"])?;
     write_file_atomic(&unit_path, unit.as_bytes(), false)?;
     run_systemctl(["daemon-reload"])?;
     run_systemctl(["enable", "--now", SERVICE_NAME])?;
-    Ok(())
+    Ok(format_diff(&unit_path, existing.as_deref(), Some(&unit)))
 }
 
-/// Stop, disable, and remove the managed systemd user unit (`sshp-listen.service`).
-pub fn uninstall_service() -> AppResult<()> {
+/// Stop, disable, and remove the managed systemd user unit (`sshp-listen.service`),
+/// returning a unified diff of the unit file removal.
+pub fn uninstall_service() -> AppResult<String> {
     let unit_path = default_service_unit_path()?;
-    ensure_owned_unit(&unit_path)?;
+    let existing = read_owned_unit(&unit_path)?;
     run_systemctl(["disable", "--now", SERVICE_NAME])?;
     match fs::remove_file(&unit_path) {
         Ok(()) => {}
@@ -290,7 +309,74 @@ pub fn uninstall_service() -> AppResult<()> {
         Err(error) => return Err(error.into()),
     }
     run_systemctl(["daemon-reload"])?;
-    Ok(())
+    Ok(format_diff(&unit_path, existing.as_deref(), None))
+}
+
+/// Format a `git diff`-style unified diff for a file change.
+pub fn format_diff(path: &Path, before: Option<&str>, after: Option<&str>) -> String {
+    let old_lines: Vec<&str> = before.unwrap_or("").lines().collect();
+    let new_lines: Vec<&str> = after.unwrap_or("").lines().collect();
+    let mut dp = vec![vec![0usize; new_lines.len() + 1]; old_lines.len() + 1];
+
+    for i in (0..old_lines.len()).rev() {
+        for j in (0..new_lines.len()).rev() {
+            dp[i][j] = if old_lines[i] == new_lines[j] {
+                dp[i + 1][j + 1] + 1
+            } else {
+                dp[i + 1][j].max(dp[i][j + 1])
+            };
+        }
+    }
+
+    let mut lines = vec![
+        diff_header("---", 'a', path, before),
+        diff_header("+++", 'b', path, after),
+    ];
+    let (mut i, mut j) = (0, 0);
+    while i < old_lines.len() || j < new_lines.len() {
+        if i < old_lines.len() && j < new_lines.len() && old_lines[i] == new_lines[j] {
+            lines.push(format!(" {}", old_lines[i]));
+            i += 1;
+            j += 1;
+        } else if i < old_lines.len() && (j == new_lines.len() || dp[i + 1][j] >= dp[i][j + 1]) {
+            lines.push(format!("-{}", old_lines[i]));
+            i += 1;
+        } else {
+            lines.push(format!("+{}", new_lines[j]));
+            j += 1;
+        }
+    }
+
+    format!("{}\n", lines.join("\n"))
+}
+
+fn diff_header(marker: &str, prefix: char, path: &Path, content: Option<&str>) -> String {
+    match content {
+        Some(_) => {
+            let rendered = path.display().to_string();
+            let sep = if rendered.starts_with('/') { "" } else { "/" };
+            format!("{marker} {prefix}{sep}{rendered}")
+        }
+        None => format!("{marker} /dev/null"),
+    }
+}
+
+fn extract_managed_block(existing: &str, alias: &HostAlias) -> Option<String> {
+    let (begin, end) = (begin_marker(alias), end_marker(alias));
+    let mut lines = Vec::new();
+    let mut inside = false;
+    for line in existing.lines() {
+        if !inside && line.trim() == begin {
+            inside = true;
+            lines.push(line);
+        } else if inside {
+            lines.push(line);
+            if line.trim() == end {
+                return Some(format!("{}\n", lines.join("\n")));
+            }
+        }
+    }
+    None
 }
 
 /// Resolve the default systemd user-unit path.
@@ -302,16 +388,12 @@ pub fn default_service_unit_path() -> AppResult<PathBuf> {
 }
 
 pub(crate) fn render_unit(executable: &Path, config_dir: &Path) -> AppResult<String> {
-    let executable = executable.to_str().ok_or_else(|| {
-        AppError::Service(Box::new(std::io::Error::other(
-            "service executable must be valid UTF-8",
-        )))
-    })?;
-    let config_dir = config_dir.to_str().ok_or_else(|| {
-        AppError::Service(Box::new(std::io::Error::other(
-            "service config directory must be valid UTF-8",
-        )))
-    })?;
+    let executable = executable
+        .to_str()
+        .ok_or_else(|| service_error("service executable must be valid UTF-8"))?;
+    let config_dir = config_dir
+        .to_str()
+        .ok_or_else(|| service_error("service config directory must be valid UTF-8"))?;
     Ok(format!(
         "{SERVICE_MARKER}[Unit]\nDescription=sshp iroh listener\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nEnvironment=XDG_CONFIG_HOME={}\nExecStart={} listen\nRestart=always\nRestartSec={}\n\n[Install]\nWantedBy=default.target\n",
         systemd_quote(config_dir, false)?,
@@ -320,22 +402,22 @@ pub(crate) fn render_unit(executable: &Path, config_dir: &Path) -> AppResult<Str
     ))
 }
 
-fn ensure_owned_unit(path: &Path) -> AppResult<()> {
+fn read_owned_unit(path: &Path) -> AppResult<Option<String>> {
     match fs::read_to_string(path) {
-        Ok(contents) if contents.starts_with(SERVICE_MARKER) => Ok(()),
-        Ok(_) => Err(AppError::Service(Box::new(std::io::Error::other(
+        Ok(contents) if contents.starts_with(SERVICE_MARKER) => Ok(Some(contents)),
+        Ok(_) => Err(service_error(
             "refusing to remove a service unit not created by sshp",
-        )))),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        )),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
 }
 
 pub(crate) fn systemd_quote(value: &str, escape_dollar: bool) -> AppResult<String> {
     if value.chars().any(char::is_control) {
-        return Err(AppError::Service(Box::new(std::io::Error::other(
+        return Err(service_error(
             "systemd value must not contain control characters",
-        ))));
+        ));
     }
     let value = value.replace('%', "%%");
     let value = if escape_dollar {
@@ -360,18 +442,17 @@ fn run_systemctl<const N: usize>(arguments: [&str; N]) -> AppResult<()> {
         .arg("--user")
         .args(arguments)
         .status()
-        .map_err(|error| {
-            AppError::Service(Box::new(std::io::Error::new(
-                error.kind(),
-                format!("failed to run systemctl --user: {error}"),
-            )))
-        })?;
+        .map_err(|error| service_error(format!("failed to run systemctl --user: {error}")))?;
     if status.success() {
         return Ok(());
     }
-    Err(AppError::Service(Box::new(std::io::Error::other(format!(
+    Err(service_error(format!(
         "systemctl --user exited with {status}"
-    )))))
+    )))
+}
+
+fn service_error(message: impl Into<String>) -> AppError {
+    AppError::Service(Box::new(std::io::Error::other(message.into())))
 }
 
 fn begin_marker(alias: &HostAlias) -> String {
@@ -526,21 +607,41 @@ mod tests {
             trace: false,
         };
 
-        write_ssh_config_entry(&ssh_config_path, &entry).expect("write ssh config");
+        let create_diff =
+            write_ssh_config_entry(&ssh_config_path, &entry).expect("write ssh config");
         write_ssh_config_entry(&custom_config_path, &entry).expect("write custom ssh config");
         let contents = fs::read_to_string(&ssh_config_path).expect("read ssh config");
-        assert!(contents.contains("Host hanoi"));
-        assert!(contents.contains(&format!(
-            "    ProxyCommand '/usr/local/bin/sshp' connect {node_id}"
+        assert_eq!(contents, entry.render().expect("rendered entry"));
+        assert!(create_diff.starts_with(&format!(
+            "--- /dev/null\n+++ b{}\n+# BEGIN sshp hanoi\n+Host hanoi\n+    ProxyCommand '/usr/local/bin/sshp' connect {node_id}\n+    User giang\n+# END sshp hanoi\n",
+            ssh_config_path.display()
         )));
 
-        disable_ssh_config_entry(&ssh_config_path, &alias).expect("disable ssh config");
+        let disable_diff =
+            disable_ssh_config_entry(&ssh_config_path, &alias).expect("disable ssh config");
         let disabled_contents =
             fs::read_to_string(&ssh_config_path).expect("read disabled ssh config");
         assert!(disabled_contents.contains(&format!(
             "    # ProxyCommand '/usr/local/bin/sshp' connect {node_id}"
         )));
         assert!(disabled_contents.contains("    User giang"));
+        assert_eq!(
+            disable_diff,
+            format!(
+                "--- a{path}\n+++ b{path}\n # BEGIN sshp hanoi\n Host hanoi\n-    ProxyCommand '/usr/local/bin/sshp' connect {node_id}\n+    # ProxyCommand '/usr/local/bin/sshp' connect {node_id}\n     User giang\n # END sshp hanoi\n",
+                path = ssh_config_path.display()
+            )
+        );
+
+        let remove_diff = format_diff(
+            Path::new("/home/user/.config/systemd/user/sshp-listen.service"),
+            Some("# Managed by sshp.\n[Unit]\n"),
+            None,
+        );
+        assert_eq!(
+            remove_diff,
+            "--- a/home/user/.config/systemd/user/sshp-listen.service\n+++ /dev/null\n-# Managed by sshp.\n-[Unit]\n"
+        );
 
         #[cfg(unix)]
         {

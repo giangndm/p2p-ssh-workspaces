@@ -50,6 +50,10 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
+GitHub Actions CI (`.github/workflows/ci.yml`) runs `fmt`, `check`, `clippy`,
+and `test` on every pull request and push to `master`. Branch protection on
+`master` requires all four checks to pass before a pull request can be merged.
+
 ## Test layers
 
 ### Unit tests

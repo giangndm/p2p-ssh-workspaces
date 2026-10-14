@@ -47,15 +47,17 @@ sequenceDiagram
 ## OpenSSH config update
 
 ```text
-sshp config enable <alias> <node-id> --write
+sshp config enable <alias> <node-id>
   -> validate alias, endpoint ID, and SSH options
   -> render managed Host block (# BEGIN sshp <alias> ... # END sshp <alias>)
   -> replace existing managed block or append to ~/.ssh/config
   -> write temporary file with 0600 mode and rename atomically
+  -> print git-diff unified diff of the modified file
 
 sshp config disable <alias>
   -> comment out ProxyCommand inside # BEGIN sshp <alias> ... # END sshp <alias>
   -> write temporary file with 0600 mode and rename atomically
+  -> print git-diff unified diff of the modified file
 ```
 
 ## Endpoint trace
@@ -77,6 +79,7 @@ sshp config install
   -> write unit atomically
   -> systemctl --user daemon-reload
   -> systemctl --user enable --now sshp-listen
+  -> print git-diff unified diff of the unit file
 ```
 
 Installation is explicit. `sshp listen` runs the foreground listener.

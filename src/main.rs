@@ -66,7 +66,7 @@ struct ConnectArgs {
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommand {
-    /// Render or write an enabled OpenSSH Host block with ProxyCommand.
+    /// Write or update an enabled OpenSSH Host block with ProxyCommand in `~/.ssh/config`.
     Enable(EnableHostArgs),
     /// Comment out ProxyCommand in a managed OpenSSH Host block while keeping other directives.
     Disable(DisableHostArgs),
@@ -102,12 +102,12 @@ struct EnableHostArgs {
     #[arg(long)]
     trace: bool,
 
-    /// Write or update the Host block in the OpenSSH config file instead of stdout.
-    #[arg(long)]
-    write: bool,
+    /// Print the generated Host block to stdout without modifying the OpenSSH config file.
+    #[arg(long, conflicts_with = "ssh_config")]
+    dry_run: bool,
 
-    /// Override the target OpenSSH config file path when `--write` is set.
-    #[arg(long, value_name = "PATH", requires = "write")]
+    /// Override the target OpenSSH config file path (default: `~/.ssh/config`).
+    #[arg(long, value_name = "PATH")]
     ssh_config: Option<PathBuf>,
 }
 
@@ -117,7 +117,7 @@ struct DisableHostArgs {
     #[arg(value_name = "ALIAS")]
     alias: HostAlias,
 
-    /// Override the target OpenSSH config file path.
+    /// Override the target OpenSSH config file path (default: `~/.ssh/config`).
     #[arg(long, value_name = "PATH")]
     ssh_config: Option<PathBuf>,
 }
@@ -187,18 +187,20 @@ async fn run_config(command: ConfigCommand) -> AppResult<i32> {
                 trace: args.trace,
             };
 
-            if args.write {
+            if args.dry_run {
+                print!("{}", entry.render()?);
+            } else {
                 let target = match args.ssh_config {
                     Some(path) => path,
                     None => default_ssh_config_path()?,
                 };
-                tokio::task::spawn_blocking(move || write_ssh_config_entry(&target, &entry))
-                    .await
-                    .map_err(|error| {
-                        std::io::Error::other(format!("config write task failed: {error}"))
-                    })??;
-            } else {
-                print!("{}", entry.render()?);
+                let diff =
+                    tokio::task::spawn_blocking(move || write_ssh_config_entry(&target, &entry))
+                        .await
+                        .map_err(|error| {
+                            std::io::Error::other(format!("config write task failed: {error}"))
+                        })??;
+                print!("{diff}");
             }
             Ok(0)
         }
@@ -207,23 +209,27 @@ async fn run_config(command: ConfigCommand) -> AppResult<i32> {
                 Some(path) => path,
                 None => default_ssh_config_path()?,
             };
-            tokio::task::spawn_blocking(move || disable_ssh_config_entry(&target, &args.alias))
-                .await
-                .map_err(|error| {
-                    std::io::Error::other(format!("config disable task failed: {error}"))
-                })??;
+            let diff =
+                tokio::task::spawn_blocking(move || disable_ssh_config_entry(&target, &args.alias))
+                    .await
+                    .map_err(|error| {
+                        std::io::Error::other(format!("config disable task failed: {error}"))
+                    })??;
+            print!("{diff}");
             Ok(0)
         }
         ConfigCommand::Install => {
-            tokio::task::spawn_blocking(install_service)
+            let diff = tokio::task::spawn_blocking(install_service)
                 .await
                 .map_err(|error| AppError::Service(Box::new(error)))??;
+            print!("{diff}");
             Ok(0)
         }
         ConfigCommand::Uninstall => {
-            tokio::task::spawn_blocking(uninstall_service)
+            let diff = tokio::task::spawn_blocking(uninstall_service)
                 .await
                 .map_err(|error| AppError::Service(Box::new(error)))??;
+            print!("{diff}");
             Ok(0)
         }
     }
@@ -269,8 +275,16 @@ mod tests {
     fn parses_config_enable_and_disable_options() {
         let node_id = sample_node_id();
         let cli = Cli::try_parse_from([
-            "sshp", "config", "enable", "hanoi", &node_id, "--user", "giang", "--port", "2222",
-            "--write",
+            "sshp",
+            "config",
+            "enable",
+            "hanoi",
+            &node_id,
+            "--user",
+            "giang",
+            "--port",
+            "2222",
+            "--dry-run",
         ])
         .expect("valid config enable args");
 
@@ -282,7 +296,7 @@ mod tests {
         assert_eq!(args.node_id.to_string(), node_id);
         assert_eq!(args.user.as_deref(), Some("giang"));
         assert_eq!(args.port.map(NonZeroU16::get), Some(2222));
-        assert!(args.write);
+        assert!(args.dry_run);
 
         let disable_cli = Cli::try_parse_from([
             "sshp",
@@ -304,7 +318,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ssh_config_path_without_write_flag_on_enable() {
+    fn rejects_ssh_config_path_with_dry_run_on_enable() {
         let node_id = sample_node_id();
         assert!(
             Cli::try_parse_from([
@@ -313,6 +327,7 @@ mod tests {
                 "enable",
                 "hanoi",
                 &node_id,
+                "--dry-run",
                 "--ssh-config",
                 "/tmp/ssh_config",
             ])

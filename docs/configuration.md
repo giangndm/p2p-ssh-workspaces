@@ -23,10 +23,11 @@ command line with `sshp listen --backend <host:port>`.
 Generate or update a host entry with `sshp config enable`:
 
 ```bash
-sshp config enable hanoi <worker-endpoint-id> --user giang --write
+sshp config enable hanoi <worker-endpoint-id> --user giang
 ```
 
-This writes a managed block into `~/.ssh/config`:
+This writes a managed block into `~/.ssh/config` and prints a `git diff`-style
+unified diff of the change:
 
 ```sshconfig
 # BEGIN sshp hanoi
@@ -36,9 +37,10 @@ Host hanoi
 # END sshp hanoi
 ```
 
-Re-running `sshp config enable hanoi ... --write` replaces only the
+Re-running `sshp config enable hanoi ...` replaces only the
 `# BEGIN sshp hanoi` ... `# END sshp hanoi` section and preserves all other
-entries in `~/.ssh/config`.
+entries in `~/.ssh/config`. Use `--dry-run` to preview the block without writing
+to disk.
 
 To disable the iroh `ProxyCommand` for a host while keeping its `User`, `Port`,
 and `IdentityFile` directives intact:

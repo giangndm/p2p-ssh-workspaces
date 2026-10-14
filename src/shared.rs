@@ -432,13 +432,8 @@ pub(crate) fn write_file_atomic(path: &Path, contents: &[u8], restrict_dir: bool
             use std::os::unix::fs::OpenOptionsExt;
             options.mode(0o600);
         }
-        let mut file = match options.open(&temp_path) {
-            Ok(file) => {
-                created = true;
-                file
-            }
-            Err(error) => return Err(error.into()),
-        };
+        let mut file = options.open(&temp_path)?;
+        created = true;
         file.write_all(contents)?;
         file.sync_all()?;
         drop(file);

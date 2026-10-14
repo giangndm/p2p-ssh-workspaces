@@ -1,31 +1,16 @@
 # Development workflow
 
-The repository is a minimal Rust binary. Each documented command is implemented
-in a small slice with matching tests; staged commands remain explicitly marked.
-Keep files cohesive and easy to follow: separate configuration, identity,
-streaming, transport, errors, and orchestration responsibilities into small
-modules.
-
-## Implementation order
-
-1. Define the config schema and parse errors. (Implemented.)
-2. Implement the Clap CLI and application errors. (Implemented.)
-3. Create a shared iroh endpoint with a persistent secret key. (Implemented.)
-4. Implement the listen accept loop and local TCP bridge. (Implemented.)
-5. Implement the connect stdio proxy. (Implemented.)
-6. Implement OpenSSH command construction and startup commands. (Implemented.)
-7. Implement reconnect, fixed delay, and cancellation. (Implemented.)
-8. Implement the Debian/Ubuntu systemd user-service installer. (Implemented.)
-9. Add CLI process integration tests and update the README. (Implemented.)
-   Network integration remains environment-gated.
+The repository is a minimal Rust binary (`sshp`) that pipes OpenSSH connections
+over iroh. Keep files cohesive and easy to follow: each top-level CLI
+subcommand (`listen`, `connect`, `config`, `trace`) lives in its own module
+file, sharing common primitives from `shared.rs`.
 
 ## Local prerequisites
 
 - Stable Rust and Cargo;
 - an OpenSSH client on the access machine;
 - an OpenSSH server listening locally on the worker;
-- tmux, Helix, or Herdr only when used by `startup` config;
-- systemd only for service installation.
+- systemd only for user-service installation.
 
 ## Cargo workflow
 
@@ -71,23 +56,17 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 Unit tests must not depend on the network or external processes. Cover:
 
-- TOML parsing and defaults;
-- `startup` validation;
-- remote-command quoting;
-- OpenSSH argument assembly;
-- reconnect state and fixed delay;
+- `NodeId`, `HostAlias`, and `BackendAddress` validation;
+- OpenSSH `Host` block rendering and idempotent upsert;
+- worker identity persistence and permissions;
+- stream forwarding and `BridgeStats` byte counts;
+- trace report formatting;
 - generated systemd units.
 
 ### Integration tests
 
 Cover:
 
-- a local TCP echo/backend round trip;
-- two local iroh endpoints using `sshp/1`;
-- connect, disconnect, and reconnect;
-- worker-key persistence;
-- optional tests gated by `ssh` and `systemd` availability.
-
-Process integration tests use a temporary config directory. Network tests must
-not use real endpoint IDs, production relays, real user SSH keys, or the
-developer's config directory.
+- CLI subcommand parsing and OpenSSH config file writing;
+- local TCP backend round trips;
+- two local iroh endpoints using `sshp/1` (environment-gated).

@@ -2,70 +2,70 @@
 
 ## Goal
 
-Let access connect to a workspace through a stable alias, even when the
-worker changes networks or is behind NAT. The worker needs no public SSH port.
+Let OpenSSH connect to a remote machine through a stable alias in
+`~/.ssh/config`, even when the worker changes networks or is behind NAT. The
+worker needs no public SSH port, and the client needs no custom wrapper around
+`ssh`.
 
 ## Data flow
 
 ```text
-access
-  sshp connect hanoi
-    └─ system ssh
-        └─ sshp connect --stdio hanoi
-            └─ iroh QUIC / ALPN sshp/1
-                └─ sshp listen
-                    └─ TCP 127.0.0.1:22
-                        └─ sshd
-                            └─ startup command
+client
+  ssh hanoi
+    └─ ProxyCommand: sshp connect <node-id>
+        └─ iroh QUIC / ALPN sshp/1
+            └─ sshp listen
+                └─ TCP 127.0.0.1:22
+                    └─ sshd
 ```
 
-An iroh endpoint ID is derived from its public key. The listener must persist
-its secret key so the ID remains stable. Access stores this ID in its config;
-the worker's IP is not its identity. Iroh can use discovery, relays, and
-direct connectivity to select a working route.
+An iroh endpoint ID is derived from its public key. The listener persists its
+secret key (`~/.config/sshp/worker.key`) so the ID remains stable. The client
+stores this ID directly in the `ProxyCommand` line inside `~/.ssh/config`. Iroh
+handles discovery, relays, and direct connectivity.
 
 References: [iroh endpoints](https://docs.iroh.computer/concepts/endpoints),
 [iroh QUIC](https://docs.iroh.computer/protocols/using-quic).
 
 ## Components
 
-### Listen
+### Listen (`sshp listen`)
 
-`sshp listen` creates an iroh endpoint, accepts connections using ALPN
-`sshp/1`, opens one bidirectional stream, and forwards data to the local SSH
-backend. The MVP default is `127.0.0.1:22`.
+`sshp listen` creates an iroh endpoint with its persistent key, accepts
+connections using ALPN `sshp/1`, opens one bidirectional stream per peer, and
+forwards bytes to the local SSH backend (`127.0.0.1:22` by default).
 
 The listener does not parse SSH or create a PTY. `sshd` and OpenSSH own those
 responsibilities.
 
-### Connect
+### Connect (`sshp connect <node-id>`)
 
-`sshp connect <alias>` reads the host config, builds an OpenSSH command with a
-ProxyCommand, and supervises the SSH process. The internal ProxyCommand
-connects to iroh and copies raw bytes between stdin and stdout.
+`sshp connect <node-id>` is an OpenSSH `ProxyCommand` stdio pipe. It creates an
+ephemeral iroh endpoint, connects to `<node-id>`, and copies raw bytes between
+`stdin` and `stdout`. With `--trace`, it logs connection timing and transferred
+byte counts to `stderr`.
 
 OpenSSH continues to handle:
 
 - public-key authentication;
 - host-key verification;
-- PTY and terminal mode;
+- PTY, terminal mode, and `RemoteCommand`;
 - `-L`, `-R`, and `-D` forwarding;
-- `scp` and `sftp` when configured with the matching ProxyCommand.
+- `scp`, `sftp`, `rsync`, Git, and IDE Remote-SSH sessions.
 
-### Startup command
+### Config (`sshp config <enable|disable|install|uninstall>`)
 
-The startup command is an argv-like list. `sshp` has no integration for any
-specific program:
+`sshp config enable` renders or atomically updates a managed `# BEGIN sshp <alias>`
+... `# END sshp <alias>` block in `~/.ssh/config`. `sshp config disable`
+comments out the `ProxyCommand` line inside that block while preserving other
+SSH directives. `sshp config install` and `sshp config uninstall` manage the
+user-level systemd service (`sshp-listen.service`) on the worker.
 
-```toml
-startup = ["tmux", "new-session", "-A", "-s", "hanoi"]
-startup = ["hx", "."]
-startup = ["herdr", "attach", "workspace-name"]
-```
+### Trace (`sshp trace <node-id>`)
 
-An empty list opens the login shell. Reconnect runs the command again. Programs
-with attach support, such as tmux or Herdr, can restore the old workspace; a
-direct editor such as Helix starts again.
+`sshp trace` binds an ephemeral iroh endpoint, establishes an `sshp/1`
+connection and bidirectional stream to `<node-id>`, and reports handshake and
+stream-open latency.
 
 ## Testable core
 
@@ -73,37 +73,28 @@ The runtime keeps external adapters at the edges of the flow:
 
 ```text
 fake session stream -> proxy core -> fake peer transport
-                                      -> worker core -> fake backend stream
+                                      -> worker core -> local TCP backend
 ```
 
 `PeerTransport` owns peer connect/accept and returns stream parts. The
-production adapter uses iroh; tests use in-memory duplex streams. `SessionRunner`
-owns one OpenSSH process attempt and its exit code. The production adapter
-launches OpenSSH; tests return scripted results.
+production adapter uses iroh; tests use in-memory duplex streams and a local
+loopback `TcpListener`.
 
 The byte pipeline uses Tokio's `AsyncRead` and `AsyncWrite` traits. It does not
-parse SSH or iroh frames. Tests can cover forwarding, half-close, disconnect,
-reconnect, and retry limits without starting SSH or iroh.
-
-Real iroh and OpenSSH tests remain small adapter tests. They verify integration
-with external tools, not the application flow.
+parse SSH or iroh frames.
 
 ## Security
 
 - The endpoint ID is public and is not a credential.
-- Restrict permissions on the listener secret key.
+- Restrict permissions (`0600`) on the listener secret key and generated
+  `~/.ssh/config`.
 - SSH authentication is the main user-authentication layer.
 - The default backend is localhost only.
-- Never log secret keys, private keys, or command lines that may contain
-  credentials.
-- Bound stream counts and control-data size if a control protocol is added
-  later.
+- Never log secret keys or SSH credentials.
 
-## Out of scope for the MVP
+## Out of scope
 
 - Implementing the SSH protocol.
-- A database or account service.
-- A web UI.
-- A plugin or launcher framework.
-- A custom relay or discovery service.
-- Resuming an editor process without a session manager.
+- A custom TOML configuration file.
+- Wrapping or supervising the `ssh` client process.
+- A database, web UI, or plugin framework.

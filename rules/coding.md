@@ -50,25 +50,26 @@ Use the following priority order:
    reason to change;
 3. **DRY** — remove duplication only when the duplicated concept is stable.
 
-Keep the implementation direct and concrete. The application has exactly two
-user-facing workflows: listening and connecting. Avoid speculative traits,
+Keep the implementation direct and concrete. The application has four CLI
+subcommands (`listen`, `connect`, `config`, `trace`). Avoid speculative traits,
 dependency injection frameworks, plugin registries, and generalized protocol
 layers.
 
 Traits are allowed only at a real side-effect seam that needs isolated tests
-(for example config loading or systemd installation). Do not add a trait just
-to make one concrete iroh implementation look generic.
+(for example peer transport). Do not add a trait just to make one concrete iroh
+implementation look generic.
 
-Use the module boundaries below:
+Use the flat module boundaries below:
 
 ```text
-shared  configuration, IDs, iroh setup, protocol constants, errors
-listen  incoming iroh connections, local SSH backend, systemd helper
-connect host lookup, OpenSSH command, stdio proxy, reconnect loop
+shared   NodeId, paths, worker identity, iroh endpoint, stream bridge, atomic file writes, errors
+listen   incoming iroh connections, BackendAddress, and local SSH backend bridge
+connect  ProxyCommand stdio proxy
+config   OpenSSH Host block enable/disable and systemd user-service install/uninstall
+trace    endpoint connectivity probe and latency report formatting
 ```
 
-The access side must not implement SSH. The listen side must not know whether
-the remote startup program is tmux, Helix, Herdr, or something else.
+The access side must not implement SSH or wrap the `ssh` process.
 
 ## Rust style
 
@@ -79,26 +80,21 @@ the remote startup program is tmux, Helix, Herdr, or something else.
 - Use enums for finite states and newtypes for IDs or validated values.
 - Prefer borrowing over cloning on data paths.
 - Keep public APIs minimal; do not re-export implementation details.
-- Add comments for protocol, retry, process, or terminal behavior that is not
-  obvious from the code.
-- Keep files cohesive and easy to follow. Prefer one responsibility per file;
-  split modules before a file becomes difficult to scan or exceeds 500 lines.
-- Keep orchestration, transport adapters, configuration, identity storage, and
-  error definitions in separate modules. Do not let one file own unrelated
-  workflows.
+- Add comments for protocol, process, or stream behavior that is not obvious
+  from the code.
+- Keep each top-level CLI subcommand in its own module (`listen.rs`,
+  `connect.rs`, `config.rs`, `trace.rs`), sharing only common primitives in
+  `shared.rs`.
 
 ## Errors and process boundaries
 
 - Return `Result` for fallible operations.
-- Use `anyhow` for application-level context and `thiserror` where a stable
-  error type is useful.
+- Use `thiserror` where a stable error type is useful.
 - Never use `unwrap()` or `expect()` in production paths.
 - Include the operation and relevant target in error context, but do not leak
   secret keys.
 - Check external command exit status and preserve useful stderr.
 - Never build a shell command by interpolating arbitrary input.
-- Treat configured executable names and arguments as data; validate empty
-  programs and reject malformed configuration before spawning.
 
 ## Async and I/O
 
@@ -107,9 +103,7 @@ the remote startup program is tmux, Helix, Herdr, or something else.
 - Use `spawn_blocking` only for unavoidable blocking operations.
 - Forward streams with bounded behavior and propagate half-close/close errors.
 - Do not create unbounded queues or read unbounded data into memory.
-- Use timeouts for connection establishment and retry delays.
-- Keep reconnect state explicit: attempt number, delay, clean exit, and
-  cancellation.
+- Use timeouts for connection establishment.
 
 ## iroh
 
@@ -118,32 +112,26 @@ the remote startup program is tmux, Helix, Herdr, or something else.
 - Use endpoint ID/address types from the selected `iroh` version rather than
   storing IP strings as the identity of a worker.
 - Register only the protocol needed by this application.
-- Do not log private keys, SSH credentials, or complete command lines if they
-  may contain secrets.
+- Do not log private keys or SSH credentials.
 
 ## Configuration and files
 
-- Parse and validate configuration at the boundary.
+- Validate arguments and paths at the boundary.
 - Use `Path`/`PathBuf`, not manually concatenated path strings.
-- Treat missing optional fields with explicit defaults.
-- Use restrictive permissions for secret-key files.
-- Write config and systemd unit files atomically.
+- Use restrictive permissions (`0600`) for secret-key and SSH config files.
+- Write SSH config and systemd unit files atomically.
 - Never overwrite an existing service file without an explicit user action.
-- Keep the config schema backward-compatible where practical; document
-  breaking changes.
 
 ## Testing
 
 At minimum, add tests for:
 
-- valid and invalid TOML configuration;
-- empty and non-empty `startup` commands;
-- shell-safe remote command construction;
-- clean exit versus reconnectable failure;
-- bounded retry backoff and cancellation;
+- valid and invalid `NodeId`, `HostAlias`, and `BackendAddress` values;
+- safe OpenSSH `Host` block rendering and idempotent upsert;
 - generated systemd unit content;
-- iroh stream to local TCP backend forwarding.
+- iroh stream to local TCP backend forwarding;
+- trace report formatting.
 
-Use unit tests for pure command/config/retry logic and integration tests for
-real local sockets or two local iroh endpoints. Do not make unit tests depend
-on a user's SSH config, tmux installation, network, or systemd.
+Use unit tests for pure config/stream/formatting logic and integration tests for
+CLI execution or local sockets. Do not make unit tests depend on a user's SSH
+config, network, or systemd.

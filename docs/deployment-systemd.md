@@ -12,7 +12,7 @@ port is required.
 On the worker:
 
 ```bash
-sshp listen --install-service
+sshp config install
 ```
 
 With the default config root, this creates:
@@ -28,6 +28,7 @@ and starts it.
 Expected unit:
 
 ```ini
+# Managed by sshp.
 [Unit]
 Description=sshp iroh listener
 After=network-online.target
@@ -54,7 +55,7 @@ To keep the user service running after logout or from boot, enable lingering:
 loginctl enable-linger "$USER"
 ```
 
-If the systemd user manager is unavailable, `sshp listen --install-service`
+If the systemd user manager is unavailable, `sshp config install`
 must return a clear error and must not create a fake unit.
 
 ## Inspect the service
@@ -74,7 +75,7 @@ systemd-analyze --user verify ~/.config/systemd/user/sshp-listen.service
 ## Remove the service
 
 ```bash
-sshp listen --uninstall-service
+sshp config uninstall
 ```
 
 Removal must disable and stop the unit before deleting the file created by

@@ -9,12 +9,13 @@ an iroh peer-to-peer connection. The product name and executable name are
 The project is intentionally narrow:
 
 - iroh is the only network transport;
-- OpenSSH remains responsible for SSH protocol, authentication, PTY, and
-  forwarding;
+- OpenSSH remains responsible for SSH protocol, authentication, PTY,
+  `RemoteCommand`, and forwarding via `~/.ssh/config`;
 - the worker forwards an iroh byte stream to a local SSH backend;
-- the access side launches the system `ssh` command and supervises reconnects;
-- tmux, Helix, Herdr, and other startup programs are configuration values, not
-  Rust integrations.
+- the access side provides a `ProxyCommand` stdio pipe, OpenSSH `Host` config
+  generation, and P2P connectivity tracing;
+- users connect with standard `ssh <alias>` (as well as `scp`, `sftp`, `rsync`,
+  and IDE Remote-SSH) using `~/.ssh/config`.
 
 ## Design principles
 
@@ -36,61 +37,59 @@ unchanged.
 
 ## Required architecture
 
-Keep one binary with two top-level modes:
+Keep one binary with four top-level subcommands:
 
 ```text
 sshp listen
-sshp connect <alias>
+sshp connect <node-id>
+sshp config <enable|disable|install|uninstall>
+sshp trace <node-id>
 ```
 
-The library is split into these modules:
+The library uses a flat single-file-per-feature layout:
 
 ```text
 src/
 ├── lib.rs
-├── shared/
-│   ├── mod.rs
-│   ├── config.rs
-│   ├── errors.rs
-│   ├── identity.rs
-│   ├── stream.rs
-│   ├── transport.rs
-│   ├── types.rs
-│   └── tests.rs
-├── listen/
-│   └── systemd.rs
+├── main.rs
+├── shared.rs
 ├── listen.rs
-├── connect/
-│   └── retry.rs
-└── connect.rs
+├── connect.rs
+├── config.rs
+└── trace.rs
 ```
 
-`shared` owns configuration, identity paths, the iroh ALPN, endpoint helpers,
-stream forwarding, and shared errors. `listen` owns the worker accept loop and
-local backend bridge; `listen/systemd.rs` owns service installation. `connect`
-owns alias lookup, OpenSSH invocation, stdio proxying, and reconnect behavior.
+`shared` owns validated `NodeId`, default paths, the iroh ALPN, endpoint
+helpers, worker identity persistence, stream forwarding, atomic file writes, and
+shared errors. `listen` owns the worker accept loop, `BackendAddress`, and local
+backend bridge. `connect` owns the `ProxyCommand` stdio proxy. `config` owns
+OpenSSH `Host` block `enable`/`disable` updates in `~/.ssh/config` and systemd
+user-service `install`/`uninstall`. `trace` owns endpoint trace diagnostics.
 
-Do not introduce a plugin system, database, control plane, or SSH
-implementation. Private `AsyncRead`/`AsyncWrite` seams are allowed when they
-make the full application flow testable without real iroh or SSH.
+Do not introduce a custom TOML config file, plugin system, database, control
+plane, or SSH implementation. Private `AsyncRead`/`AsyncWrite` seams are
+allowed when they make the full application flow testable without real iroh or
+SSH.
 
 ## Behavioral contract
 
-- The worker persists its iroh secret key so its public endpoint ID is stable.
-- The access config stores an endpoint ID, not a presumed public IP.
+- The worker persists its iroh secret key (`~/.config/sshp/worker.key`) so its
+  public endpoint ID is stable.
 - The listener accepts the application ALPN `sshp/1` and forwards one
   bidirectional stream to the configured local SSH backend.
 - The default backend is `127.0.0.1:22`.
-- `sshp connect <alias>` uses the host's normal `~/.ssh/config` settings and
-  injects a ProxyCommand that invokes the hidden stdio path of `connect`.
-- `startup` is an argv-like list. An empty list means the normal login shell;
-  `["tmux", "new-session", "-A", "-s", "name"]` is one common choice;
-  `["hx", "."]` and a Herdr command are also valid.
-- Reconnect reruns the configured startup command. Persistent programs such as
-  tmux or Herdr can reattach; a normal editor process may start again.
-- A clean SSH exit must not be treated as a network disconnect.
-- Reconnect status is printed by the outer client process, not injected into
-  the remote PTY.
+- `sshp connect <node-id>` bridges `stdin` and `stdout` directly to the worker's
+  iroh stream for use in OpenSSH `ProxyCommand`. Diagnostics and `--trace`
+  output go to `stderr` only.
+- `sshp config enable <alias> <node-id>` renders or atomically updates a managed
+  `Host <alias>` block in `~/.ssh/config`.
+- `sshp config disable <alias>` comments out `ProxyCommand` inside the managed
+  `Host <alias>` block while preserving other directives (`User`, `Port`,
+  `IdentityFile`).
+- `sshp config install` and `sshp config uninstall` manage the systemd user
+  unit (`sshp-listen.service`).
+- `sshp trace <node-id>` probes iroh connectivity and reports handshake and
+  stream-open latency.
 
 ## Coding rules
 

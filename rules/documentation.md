@@ -38,9 +38,7 @@ diagrams when they clarify ownership or connection flow.
 - Use realistic aliases such as `hanoi`.
 - Show complete relevant config blocks, not fragments whose context is unclear.
 - Keep secrets and real endpoint IDs out of examples.
-- Explain whether a command is run on the worker or access machine.
-- For `startup`, show the executable and each argument as a separate array
-  item.
+- Explain whether a command is run on the worker or client machine.
 
 ## Change discipline
 
@@ -48,7 +46,7 @@ When changing code, review these documents for required updates:
 
 - `docs/architecture.md` for design or protocol changes;
 - `docs/cli.md` for flags and exit behavior;
-- `docs/configuration.md` for TOML schema;
+- `docs/configuration.md` for OpenSSH config generation and worker paths;
 - `docs/deployment-systemd.md` for service lifecycle;
 - `docs/development.md` for build/test workflow;
 - the ADR when a foundational decision changes.

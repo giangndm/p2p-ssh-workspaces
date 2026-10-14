@@ -29,11 +29,14 @@ Apply these principles in this order:
 Do not trade KISS for speculative extensibility. A small amount of explicit
 code is preferable to a generic framework.
 
-## Language policy
+## Language and Git policy
 
 All documentation, code comments, and future Git commit messages must use
 concise English. Keep technical names, commands, flags, and protocol values
 unchanged.
+
+When merging pull requests, always use **rebase** (`gh pr merge --rebase`) or
+**squash** (`gh pr merge --squash`). Never create merge commits (`--merge`).
 
 ## Required architecture
 

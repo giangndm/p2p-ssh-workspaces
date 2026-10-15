@@ -1,7 +1,7 @@
 # CLI contract
 
-> Status: `listen`, `connect`, `config`, and `trace` are implemented. Full
-> network integration verification remains staged.
+> Status: `listen`, `connect`, `autoconnect`, `config`, and `trace` are
+> implemented. Full network integration verification remains staged.
 
 The executable is `sshp`.
 
@@ -44,6 +44,26 @@ between `stdin` and `stdout`.
 - `stdout` is reserved strictly for the SSH byte stream.
 - Diagnostics and `--trace` connection/transfer metrics are written to `stderr`
   only.
+
+## Autoconnect mode (Interactive SSH reconnect loop)
+
+```bash
+sshp autoconnect <host>
+sshp autoconnect <host> "tmux new -A -s work"
+sshp autoconnect --trace <host> "tmux new -A -s work"
+```
+
+Runs `ssh` against `<host>` with `-o ServerAliveInterval=5` and
+`-o ServerAliveCountMax=2` (plus `-t` when `[command]` is supplied) and
+automatically reconnects whenever `ssh` exits with code `255` (connection lost
+due to network changes or laptop sleep/wake).
+
+- Exits immediately with the command's exit code when `ssh` terminates with a
+  non-`255` status (such as `0` when detaching or exiting `tmux`).
+- Reconnect delay starts at `1s` and doubles up to `10s` on consecutive quick
+  failures (`< 10s`), resetting to `1s` after any session that stays connected
+  for at least `10s`.
+- `--trace` logs each `ssh` invocation to `stderr`.
 
 ## Config mode (OpenSSH `Host` blocks and worker service)
 

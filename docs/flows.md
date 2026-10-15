@@ -44,6 +44,19 @@ sequenceDiagram
     SSH-->>U: interactive session / scp / sftp
 ```
 
+## Autoconnect (`sshp autoconnect <host> [command]`)
+
+```text
+sshp autoconnect <host> [command]
+  -> validate host alias and optional remote command
+  -> spawn ssh -o ServerAliveInterval=5 -o ServerAliveCountMax=2 [-t] -- <host> [command]
+  -> if ssh exits with 255 (connection lost):
+       reset delay to 1s if session lasted >= 10s, else double up to 10s
+       sleep and respawn ssh
+  -> if ssh exits with non-255 status:
+       return that exit code immediately
+```
+
 ## OpenSSH config update
 
 ```text

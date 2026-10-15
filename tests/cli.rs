@@ -39,7 +39,7 @@ impl Drop for TempDir {
 }
 
 #[test]
-fn help_lists_all_four_subcommands() {
+fn help_lists_all_five_subcommands() {
     let output = Command::new(env!("CARGO_BIN_EXE_sshp"))
         .arg("--help")
         .output()
@@ -49,6 +49,7 @@ fn help_lists_all_four_subcommands() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("listen"));
     assert!(stdout.contains("connect"));
+    assert!(stdout.contains("autoconnect"));
     assert!(stdout.contains("config"));
     assert!(stdout.contains("trace"));
 }
@@ -153,6 +154,17 @@ fn connect_and_trace_reject_invalid_endpoint_ids_and_relays_before_network() {
             "{relay_stderr}"
         );
     }
+
+    let empty_command = Command::new(env!("CARGO_BIN_EXE_sshp"))
+        .args(["autoconnect", "hanoi", "   "])
+        .output()
+        .expect("run sshp autoconnect with empty command");
+    assert!(!empty_command.status.success());
+    let empty_stderr = String::from_utf8_lossy(&empty_command.stderr);
+    assert!(
+        empty_stderr.contains("remote command must not be empty"),
+        "{empty_stderr}"
+    );
 }
 
 #[test]

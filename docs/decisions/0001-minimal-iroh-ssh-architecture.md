@@ -16,12 +16,14 @@ provides.
 ## Decision
 
 `sshp` acts purely as an iroh P2P byte pipe between OpenSSH `ProxyCommand` on
-the client and local `sshd` on the worker, with helper subcommands for OpenSSH
-config generation and endpoint tracing:
+the client and local `sshd` on the worker, with helper subcommands for
+interactive session reconnection, OpenSSH config generation, and endpoint
+tracing:
 
 ```text
 sshp listen
 sshp connect <node-id>
+sshp autoconnect <host> [command]
 sshp config <enable|disable|install|uninstall>
 sshp trace <node-id>
 ```

@@ -10,7 +10,7 @@ project uses `iroh` 1.1 and OpenSSH.
 crate::shared    NodeId, RelayUrl, errors, default paths, worker identity, iroh adapter,
                  atomic file writes, and bidirectional byte bridge
 crate::listen    Listener, BackendAddress, and local TCP backend bridge
-crate::connect   connect_stdio and ProxyCommand stdio bridge
+crate::connect   connect_stdio, autoconnect, and ProxyCommand stdio bridge
 crate::config    HostAlias, SshConfigEntry, upsert_ssh_config, disable_ssh_config,
                  write_ssh_config_entry, disable_ssh_config_entry,
                  install_service, and uninstall_service
@@ -105,6 +105,11 @@ pub async fn connect_stdio(
     relay: Option<RelayUrl>,
     trace: bool,
 ) -> AppResult<()>;
+pub async fn autoconnect(
+    host: HostAlias,
+    command: Option<String>,
+    trace: bool,
+) -> AppResult<i32>;
 
 // crate::config
 pub struct HostAlias(String);

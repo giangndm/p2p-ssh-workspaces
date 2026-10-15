@@ -14,7 +14,7 @@ seams and in-memory streams.
 | `src/lib.rs` | module wiring |
 | `src/shared.rs` | `NodeId`, errors, paths, identity, stream bridge, atomic file writes, iroh boundary |
 | `src/listen.rs` | listener orchestration, `BackendAddress`, and local TCP backend bridge |
-| `src/connect.rs` | `ProxyCommand` stdio pipe |
+| `src/connect.rs` | `ProxyCommand` stdio pipe and `autoconnect` reconnect supervisor |
 | `src/config.rs` | OpenSSH `Host` block `enable`/`disable` and systemd service `install`/`uninstall` |
 | `src/trace.rs` | endpoint connectivity probe and trace formatting |
 | `src/main.rs` | CLI wiring |
@@ -57,6 +57,8 @@ a custom SSH protocol.
 
 1. `run_proxy` bridges bytes in both directions and reports transferred byte
    counts.
-2. The stdio proxy sends no status text to `stdout`.
-3. `format_trace_report` renders deterministic diagnostic fields.
-4. Invalid endpoint IDs are rejected before binding an iroh endpoint.
+2. `autoconnect` constructs safe `ssh` arguments and retries only on transport
+   disconnect exit code `255` with bounded backoff.
+3. The stdio proxy sends no status text to `stdout`.
+4. `format_trace_report` renders deterministic diagnostic fields.
+5. Invalid endpoint IDs are rejected before binding an iroh endpoint.

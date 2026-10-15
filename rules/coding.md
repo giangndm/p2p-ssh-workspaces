@@ -50,10 +50,10 @@ Use the following priority order:
    reason to change;
 3. **DRY** — remove duplication only when the duplicated concept is stable.
 
-Keep the implementation direct and concrete. The application has four CLI
-subcommands (`listen`, `connect`, `config`, `trace`). Avoid speculative traits,
-dependency injection frameworks, plugin registries, and generalized protocol
-layers.
+Keep the implementation direct and concrete. The application has five CLI
+subcommands (`listen`, `connect`, `autoconnect`, `config`, `trace`). Avoid
+speculative traits, dependency injection frameworks, plugin registries, and
+generalized protocol layers.
 
 Traits are allowed only at a real side-effect seam that needs isolated tests
 (for example peer transport). Do not add a trait just to make one concrete iroh
@@ -64,12 +64,12 @@ Use the flat module boundaries below:
 ```text
 shared   NodeId, paths, worker identity, iroh endpoint, stream bridge, atomic file writes, errors
 listen   incoming iroh connections, BackendAddress, and local SSH backend bridge
-connect  ProxyCommand stdio proxy
+connect  ProxyCommand stdio proxy and autoconnect SSH reconnect supervisor
 config   OpenSSH Host block enable/disable and systemd user-service install/uninstall
 trace    endpoint connectivity probe and latency report formatting
 ```
 
-The access side must not implement SSH or wrap the `ssh` process.
+The access side must not implement the SSH protocol.
 
 ## Rust style
 

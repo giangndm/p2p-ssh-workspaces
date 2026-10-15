@@ -53,6 +53,18 @@ OpenSSH continues to handle:
 - `-L`, `-R`, and `-D` forwarding;
 - `scp`, `sftp`, `rsync`, Git, and IDE Remote-SSH sessions.
 
+### Autoconnect (`sshp autoconnect <host> [command]`)
+
+`sshp autoconnect <host> [command]` runs an interactive `ssh` session against a
+configured host alias in `~/.ssh/config` with `ServerAliveInterval=5` and
+`ServerAliveCountMax=2` (and `-t` when `command` is provided, e.g.,
+`tmux new -A -s main`). When `ssh` exits with status `255` (transport
+disconnect, network switch, or laptop sleep/wake), `sshp autoconnect` retries
+automatically with bounded exponential backoff (`1s..=10s`, resetting to `1s`
+after sessions lasting at least `10s`). When `ssh` exits with any non-`255`
+status (such as `0` when the user exits or detaches `tmux`), it returns that
+exit status immediately.
+
 ### Config (`sshp config <enable|disable|install|uninstall>`)
 
 `sshp config enable` renders or atomically updates a managed `# BEGIN sshp <alias>`
@@ -96,5 +108,4 @@ parse SSH or iroh frames.
 
 - Implementing the SSH protocol.
 - A custom TOML configuration file.
-- Wrapping or supervising the `ssh` client process.
 - A database, web UI, or plugin framework.

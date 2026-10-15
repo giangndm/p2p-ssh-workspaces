@@ -10,8 +10,8 @@ use tokio::{
 };
 
 use crate::shared::{
-    AppResult, BridgeStats, ConfigError, IrohEndpoint, NodeId, PeerTransport, StreamParts, bridge,
-    non_empty, timeout_error,
+    AppResult, BridgeStats, ConfigError, IrohEndpoint, NodeId, PeerTransport, RelayUrl,
+    StreamParts, bridge, non_empty, timeout_error,
 };
 
 /// Default local SSH backend address.
@@ -103,13 +103,14 @@ pub struct Listener {
 }
 
 impl Listener {
-    /// Bind a listener with a persistent identity path and local SSH backend.
+    /// Bind a listener with a persistent identity path, local SSH backend, and optional relay.
     pub async fn bind(
         identity_path: &Path,
         backend: BackendAddress,
+        relay: Option<RelayUrl>,
         trace: bool,
     ) -> AppResult<Self> {
-        let endpoint = IrohEndpoint::bind(identity_path).await?;
+        let endpoint = IrohEndpoint::bind(identity_path, relay).await?;
         Ok(Self {
             endpoint,
             backend,

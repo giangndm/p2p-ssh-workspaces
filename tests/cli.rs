@@ -67,6 +67,8 @@ fn config_enables_and_disables_managed_ssh_config_block_with_log_output() {
             &node_id,
             "--user",
             "giang",
+            "--relay",
+            "https://relay.example.com:3340",
             "--trace",
             "--dry-run",
         ])
@@ -76,7 +78,9 @@ fn config_enables_and_disables_managed_ssh_config_block_with_log_output() {
     assert!(dry_run_output.status.success());
     let rendered_block = String::from_utf8_lossy(&dry_run_output.stdout);
     assert!(rendered_block.contains("Host hanoi"));
-    assert!(rendered_block.contains(&format!("connect --trace {node_id}")));
+    assert!(rendered_block.contains(&format!(
+        "connect --relay 'https://relay.example.com:3340/' --trace {node_id}"
+    )));
     assert!(rendered_block.contains("User giang"));
 
     let enable_output = Command::new(env!("CARGO_BIN_EXE_sshp"))
@@ -87,6 +91,8 @@ fn config_enables_and_disables_managed_ssh_config_block_with_log_output() {
             &node_id,
             "--user",
             "giang",
+            "--relay",
+            "https://relay.example.com:3340",
             "--trace",
             "--ssh-config",
         ])
@@ -123,7 +129,8 @@ fn config_enables_and_disables_managed_ssh_config_block_with_log_output() {
 }
 
 #[test]
-fn connect_and_trace_reject_invalid_endpoint_ids_before_network() {
+fn connect_and_trace_reject_invalid_endpoint_ids_and_relays_before_network() {
+    let valid_node_id = iroh::SecretKey::from([7; 32]).public().to_string();
     for subcommand in ["connect", "trace"] {
         let output = Command::new(env!("CARGO_BIN_EXE_sshp"))
             .args([subcommand, "not-an-endpoint-id"])
@@ -133,6 +140,18 @@ fn connect_and_trace_reject_invalid_endpoint_ids_before_network() {
         assert!(!output.status.success());
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains("invalid endpoint ID"), "{stderr}");
+
+        let invalid_relay = Command::new(env!("CARGO_BIN_EXE_sshp"))
+            .args([subcommand, &valid_node_id, "--relay", "ftp://bad-relay"])
+            .output()
+            .expect("run sshp with invalid relay url");
+
+        assert!(!invalid_relay.status.success());
+        let relay_stderr = String::from_utf8_lossy(&invalid_relay.stderr);
+        assert!(
+            relay_stderr.contains("relay_url must use http or https scheme"),
+            "{relay_stderr}"
+        );
     }
 }
 

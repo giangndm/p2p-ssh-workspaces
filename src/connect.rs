@@ -5,12 +5,12 @@ use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncWrite, stdin, stdout};
 
 use crate::shared::{
-    AppResult, BridgeStats, IrohEndpoint, NodeId, PeerTransport, StreamParts, bridge,
+    AppResult, BridgeStats, IrohEndpoint, NodeId, PeerTransport, RelayUrl, StreamParts, bridge,
 };
 
 /// Bridge OpenSSH `ProxyCommand` stdio to one worker iroh stream.
-pub async fn connect_stdio(node_id: NodeId, trace: bool) -> AppResult<()> {
-    let endpoint = IrohEndpoint::bind_ephemeral().await?;
+pub async fn connect_stdio(node_id: NodeId, relay: Option<RelayUrl>, trace: bool) -> AppResult<()> {
+    let endpoint = IrohEndpoint::bind_ephemeral(relay).await?;
     if trace {
         eprintln!("sshp connect: local endpoint {}", endpoint.id());
         eprintln!("sshp connect: connecting to {node_id}");

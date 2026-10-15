@@ -26,7 +26,7 @@ client config file. On the worker, `sshp config install` and
 
 Run the install script with `bash`. It automatically detects your OS and
 architecture (`macOS arm64` -> `aarch64-apple-darwin`, `Linux x86_64` ->
-`x86_64-unknown-linux-gnu`), downloads the latest release binary from GitHub
+`x86_64-unknown-linux-musl`), downloads the latest release binary from GitHub
 Releases, verifies its SHA-256 checksum, and installs `sshp` to
 `~/.local/bin/sshp`:
 
@@ -77,6 +77,27 @@ sshp trace <worker-node-id>
 # Temporarily disable the iroh ProxyCommand for a host while keeping User/Port/IdentityFile:
 sshp config disable hanoi
 ```
+
+### 3. Optional: Self-hosted relay server with Docker
+
+By default, `sshp` uses the public Number 0 relay servers. To run your own
+relay server with Docker (`n0computer/iroh-relay`):
+
+```bash
+# Start a plain HTTP relay on port 3340 (LAN / VPN / behind a TLS reverse proxy):
+docker run -d --name iroh-relay --restart unless-stopped -p 3340:3340 n0computer/iroh-relay:latest --dev
+
+# Worker: listen using the custom relay (or `sshp config install --relay http://<relay-host>:3340`):
+sshp listen --relay http://<relay-host>:3340
+
+# Client: configure ~/.ssh/config and probe via the custom relay:
+sshp config enable hanoi <worker-node-id> --user <ssh-user> --relay http://<relay-host>:3340
+sshp trace --relay http://<relay-host>:3340 <worker-node-id>
+ssh hanoi
+```
+
+See [Configuration](docs/configuration.md#self-hosted-relay-server-with-docker-iroh-relay)
+for production HTTPS + QUIC Address Discovery (`7842/udp`) setup.
 
 ## Project rules
 

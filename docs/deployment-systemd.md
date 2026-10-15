@@ -13,6 +13,8 @@ On the worker:
 
 ```bash
 sshp config install
+# Or with a custom iroh relay server:
+sshp config install --relay https://relay.example.com
 ```
 
 With the default config root, this creates:

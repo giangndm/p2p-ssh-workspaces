@@ -3,7 +3,8 @@
 use std::time::Instant;
 
 use crate::shared::{
-    ALPN, AppResult, IROH_CONNECT_TIMEOUT, IrohEndpoint, NodeId, iroh_error, timeout_error,
+    ALPN, AppResult, IROH_CONNECT_TIMEOUT, IrohEndpoint, NodeId, RelayUrl, iroh_error,
+    timeout_error,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,12 +21,14 @@ pub struct TraceReport {
 }
 
 /// Probe connectivity and measure handshake and stream-open latency to a worker endpoint.
-pub async fn trace_node(node_id: NodeId) -> AppResult<TraceReport> {
-    let endpoint = IrohEndpoint::bind_ephemeral().await?;
+pub async fn trace_node(node_id: NodeId, relay: Option<RelayUrl>) -> AppResult<TraceReport> {
+    let endpoint = IrohEndpoint::bind_ephemeral(relay).await?;
     let handshake_start = Instant::now();
     let connection = tokio::time::timeout(
         IROH_CONNECT_TIMEOUT,
-        endpoint.endpoint.connect(*node_id.as_ref(), ALPN),
+        endpoint
+            .endpoint
+            .connect(endpoint.target_addr(node_id), ALPN),
     )
     .await
     .map_err(|_| timeout_error("timed out connecting to worker"))?

@@ -18,11 +18,13 @@ and backend errors to `stderr`. By default, `sshp listen` forwards streams to
 
 ```bash
 sshp listen --backend 127.0.0.1:22
+sshp listen --relay https://relay.example.com
 sshp listen --trace
 sshp listen --print-id
 ```
 
 - `--backend <ADDR>` overrides the local TCP backend address.
+- `--relay <URL>` uses a custom iroh relay server (`http://` or `https://`).
 - `--trace` logs accepted peer IDs and per-session byte counts to `stderr`.
 - `--print-id` prints the persistent endpoint ID to `stdout` and exits.
 
@@ -30,6 +32,7 @@ sshp listen --print-id
 
 ```bash
 sshp connect <node-id>
+sshp connect --relay https://relay.example.com <node-id>
 sshp connect --trace <node-id>
 ```
 
@@ -37,6 +40,7 @@ This command is invoked by OpenSSH `ProxyCommand`. It creates an ephemeral iroh
 endpoint, connects to `<node-id>` using ALPN `sshp/1`, and bridges raw bytes
 between `stdin` and `stdout`.
 
+- `--relay <URL>` dials through and targets the specified custom iroh relay server.
 - `stdout` is reserved strictly for the SSH byte stream.
 - Diagnostics and `--trace` connection/transfer metrics are written to `stderr`
   only.
@@ -50,7 +54,7 @@ All modifying `sshp config` subcommands (`enable`, `disable`, `install`,
 ### Enable a host
 
 ```bash
-sshp config enable <alias> <node-id> [--user <USER>] [--port <PORT>] [--identity-file <PATH>] [--trace]
+sshp config enable <alias> <node-id> [--user <USER>] [--port <PORT>] [--identity-file <PATH>] [--relay <URL>] [--trace]
 sshp config enable <alias> <node-id> --ssh-config /custom/ssh_config
 sshp config enable <alias> <node-id> --dry-run
 ```
@@ -63,6 +67,7 @@ Atomically writes or updates a managed `Host <alias>` block in `~/.ssh/config`
   `+++`, and `+`/`-` lines).
 - With `--dry-run`, prints only the rendered block to `stdout` without touching
   disk.
+- `--relay <URL>` embeds `--relay <URL>` in the generated `ProxyCommand`.
 - `--trace` adds `--trace` to the generated `ProxyCommand`.
 
 ### Disable a host
@@ -79,17 +84,20 @@ the change.
 ### Install or uninstall the worker systemd service
 
 ```bash
-sshp config install
+sshp config install [--relay <URL>]
 sshp config uninstall
 ```
 
 Manage the Debian/Ubuntu systemd user unit (`sshp-listen.service`) and print a
-`git diff`-style unified diff of the installed or removed unit file.
+`git diff`-style unified diff of the installed or removed unit file. When
+`--relay <URL>` is supplied, the generated `ExecStart` passes `--relay <URL>` to
+`sshp listen`.
 
 ## Trace mode (P2P health probe)
 
 ```bash
 sshp trace <node-id>
+sshp trace --relay https://relay.example.com <node-id>
 ```
 
 Bind an ephemeral iroh endpoint, connect to `<node-id>` using ALPN `sshp/1`,

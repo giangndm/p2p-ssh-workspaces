@@ -8,8 +8,8 @@ use std::{
 };
 
 use crate::shared::{
-    AppError, AppResult, ConfigError, NodeId, absolute_path, default_config_base_dir, non_empty,
-    write_file_atomic,
+    AppError, AppResult, ConfigError, NodeId, RelayUrl, absolute_path, default_config_base_dir,
+    non_empty, write_file_atomic,
 };
 
 const SERVICE_NAME: &str = "sshp-listen.service";
@@ -80,6 +80,8 @@ pub struct SshConfigEntry {
     pub port: Option<u16>,
     /// Optional SSH identity file path.
     pub identity_file: Option<PathBuf>,
+    /// Optional custom iroh relay URL passed to `sshp connect`.
+    pub relay: Option<RelayUrl>,
     /// Whether `ProxyCommand` should pass `--trace` to `sshp connect`.
     pub trace: bool,
 }
@@ -96,11 +98,16 @@ impl SshConfigEntry {
             );
         }
         let quoted_exe = shell_quote(executable)?;
-        let proxy_command = if self.trace {
-            format!("{quoted_exe} connect --trace {}", self.node_id)
-        } else {
-            format!("{quoted_exe} connect {}", self.node_id)
-        };
+        let mut command_parts = vec![quoted_exe, "connect".to_owned()];
+        if let Some(relay) = &self.relay {
+            command_parts.push("--relay".to_owned());
+            command_parts.push(shell_quote(&relay.to_string())?);
+        }
+        if self.trace {
+            command_parts.push("--trace".to_owned());
+        }
+        command_parts.push(self.node_id.to_string());
+        let proxy_command = command_parts.join(" ");
 
         let mut lines = vec![
             begin_marker(&self.alias),
@@ -280,7 +287,7 @@ pub fn disable_ssh_config_entry(path: &Path, alias: &HostAlias) -> AppResult<Str
 
 /// Render and install the systemd user unit (`sshp-listen.service`),
 /// returning a unified diff of the unit file change.
-pub fn install_service() -> AppResult<String> {
+pub fn install_service(relay: Option<&RelayUrl>) -> AppResult<String> {
     let executable = std::env::current_exe()?;
     if !executable.is_absolute() {
         return Err(service_error("service executable must be an absolute path"));
@@ -288,7 +295,7 @@ pub fn install_service() -> AppResult<String> {
     let config_dir = default_config_base_dir()?;
     let unit_path = default_service_unit_path()?;
     let existing = read_owned_unit(&unit_path)?;
-    let unit = render_unit(&executable, &config_dir)?;
+    let unit = render_unit(&executable, &config_dir, relay)?;
 
     run_systemctl(["show", "--property=Version", "--value"])?;
     write_file_atomic(&unit_path, unit.as_bytes(), false)?;
@@ -387,17 +394,27 @@ pub fn default_service_unit_path() -> AppResult<PathBuf> {
         .join(SERVICE_NAME))
 }
 
-pub(crate) fn render_unit(executable: &Path, config_dir: &Path) -> AppResult<String> {
+pub(crate) fn render_unit(
+    executable: &Path,
+    config_dir: &Path,
+    relay: Option<&RelayUrl>,
+) -> AppResult<String> {
     let executable = executable
         .to_str()
         .ok_or_else(|| service_error("service executable must be valid UTF-8"))?;
     let config_dir = config_dir
         .to_str()
         .ok_or_else(|| service_error("service config directory must be valid UTF-8"))?;
+    let mut exec_start = format!("{} listen", systemd_quote(executable, true)?);
+    if let Some(relay) = relay {
+        exec_start.push_str(&format!(
+            " --relay {}",
+            systemd_quote(&relay.to_string(), true)?
+        ));
+    }
     Ok(format!(
-        "{SERVICE_MARKER}[Unit]\nDescription=sshp iroh listener\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nEnvironment=XDG_CONFIG_HOME={}\nExecStart={} listen\nRestart=always\nRestartSec={}\n\n[Install]\nWantedBy=default.target\n",
+        "{SERVICE_MARKER}[Unit]\nDescription=sshp iroh listener\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nEnvironment=XDG_CONFIG_HOME={}\nExecStart={exec_start}\nRestart=always\nRestartSec={}\n\n[Install]\nWantedBy=default.target\n",
         systemd_quote(config_dir, false)?,
-        systemd_quote(executable, true)?,
         SERVICE_RESTART_DELAY,
     ))
 }
@@ -544,6 +561,7 @@ mod tests {
             user: Some("giang".to_owned()),
             port: Some(2222),
             identity_file: Some(PathBuf::from("/home/giang/.ssh/work %key")),
+            relay: Some("https://relay.example.com:3340".parse().expect("relay")),
             trace: true,
         };
 
@@ -551,7 +569,7 @@ mod tests {
         assert_eq!(
             rendered,
             format!(
-                "# BEGIN sshp hanoi\nHost hanoi\n    ProxyCommand '/opt/ssh%%workspaces/sshp' connect --trace {node_id}\n    User giang\n    Port 2222\n    IdentityFile \"/home/giang/.ssh/work %%key\"\n# END sshp hanoi\n"
+                "# BEGIN sshp hanoi\nHost hanoi\n    ProxyCommand '/opt/ssh%%workspaces/sshp' connect --relay 'https://relay.example.com:3340/' --trace {node_id}\n    User giang\n    Port 2222\n    IdentityFile \"/home/giang/.ssh/work %%key\"\n# END sshp hanoi\n"
             )
         );
     }
@@ -604,6 +622,7 @@ mod tests {
             user: Some("giang".to_owned()),
             port: None,
             identity_file: None,
+            relay: None,
             trace: false,
         };
 
@@ -662,6 +681,7 @@ mod tests {
         let unit = render_unit(
             Path::new("/opt/ssh workspaces/sshp"),
             Path::new("/config/base"),
+            None,
         )
         .expect("unit");
         assert!(unit.contains("ExecStart=\"/opt/ssh workspaces/sshp\" listen"));
@@ -669,10 +689,19 @@ mod tests {
         assert!(unit.contains("Restart=always"));
         assert!(unit.contains("WantedBy=default.target"));
 
-        let escaped =
-            render_unit(Path::new("/opt/$HOME/sshp"), Path::new("/config/%root")).expect("unit");
+        let relay: RelayUrl = "https://relay.example.com:3340".parse().expect("relay");
+        let escaped = render_unit(
+            Path::new("/opt/$HOME/sshp"),
+            Path::new("/config/%root"),
+            Some(&relay),
+        )
+        .expect("unit");
         assert!(escaped.contains("Environment=XDG_CONFIG_HOME=/config/%%root"));
-        assert!(escaped.contains("ExecStart=/opt/$$HOME/sshp listen"));
+        assert!(
+            escaped.contains(
+                "ExecStart=/opt/$$HOME/sshp listen --relay https://relay.example.com:3340/"
+            )
+        );
         assert!(systemd_quote("bad\nvalue", true).is_err());
     }
 }

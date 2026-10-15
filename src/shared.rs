@@ -38,6 +38,9 @@ pub enum ConfigError {
     #[error("invalid endpoint ID: {0}")]
     /// The value is not a valid iroh endpoint ID.
     InvalidNodeId(#[source] iroh::KeyParsingError),
+    #[error("invalid relay URL: {0}")]
+    /// The value is not a valid iroh relay URL.
+    InvalidRelayUrl(#[source] iroh::RelayUrlParseError),
 }
 
 #[derive(Debug, Error)]
@@ -107,6 +110,37 @@ impl FromStr for NodeId {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+/// Validated iroh relay server URL.
+pub struct RelayUrl(iroh::RelayUrl);
+
+impl fmt::Display for RelayUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl AsRef<iroh::RelayUrl> for RelayUrl {
+    fn as_ref(&self) -> &iroh::RelayUrl {
+        &self.0
+    }
+}
+
+impl FromStr for RelayUrl {
+    type Err = ConfigError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let value = non_empty(value, "relay_url")?;
+        let url = iroh::RelayUrl::from_str(value).map_err(ConfigError::InvalidRelayUrl)?;
+        if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+            return Err(ConfigError::Invalid(
+                "relay_url must use http or https scheme with a valid host".to_owned(),
+            ));
+        }
+        Ok(Self(url))
+    }
+}
+
 /// Read and write halves of one byte stream.
 pub(crate) struct StreamParts<R, W> {
     pub(crate) reader: R,
@@ -162,6 +196,7 @@ where
 /// Opaque boundary for the concrete iroh endpoint used by both modes.
 pub struct IrohEndpoint {
     pub(crate) endpoint: iroh::Endpoint,
+    pub(crate) relay: Option<RelayUrl>,
 }
 
 /// Peer transport used by access and listen orchestration.
@@ -175,31 +210,33 @@ pub(crate) trait PeerTransport {
 }
 
 impl IrohEndpoint {
-    /// Bind an iroh endpoint using a persistent identity.
-    pub async fn bind(identity_path: &Path) -> AppResult<Self> {
+    /// Bind an iroh endpoint using a persistent identity and optional custom relay.
+    pub async fn bind(identity_path: &Path, relay: Option<RelayUrl>) -> AppResult<Self> {
         let secret_key = load_identity(identity_path).await?;
-        let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
+        let endpoint = endpoint_builder(relay.as_ref())
             .secret_key(secret_key)
-            .alpns(vec![ALPN.to_vec()])
             .bind()
             .await
             .map_err(iroh_error)?;
-        Ok(Self { endpoint })
+        Ok(Self { endpoint, relay })
     }
 
     /// Bind an ephemeral access endpoint without persisting an identity.
-    pub async fn bind_ephemeral() -> AppResult<Self> {
-        let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::N0)
-            .alpns(vec![ALPN.to_vec()])
+    pub async fn bind_ephemeral(relay: Option<RelayUrl>) -> AppResult<Self> {
+        let endpoint = endpoint_builder(relay.as_ref())
             .bind()
             .await
             .map_err(iroh_error)?;
-        Ok(Self { endpoint })
+        Ok(Self { endpoint, relay })
     }
 
     /// Return this endpoint's stable public identifier.
     pub fn id(&self) -> NodeId {
         NodeId::from(self.endpoint.id())
+    }
+
+    pub(crate) fn target_addr(&self, peer: NodeId) -> iroh::EndpointAddr {
+        target_endpoint_addr(peer, self.relay.as_ref())
     }
 
     pub(crate) async fn connect_addr(
@@ -246,7 +283,26 @@ impl IrohEndpoint {
 
     #[cfg(test)]
     pub(crate) fn from_endpoint(endpoint: iroh::Endpoint) -> Self {
-        Self { endpoint }
+        Self {
+            endpoint,
+            relay: None,
+        }
+    }
+}
+
+fn endpoint_builder(relay: Option<&RelayUrl>) -> iroh::endpoint::Builder {
+    let builder = iroh::Endpoint::builder(iroh::endpoint::presets::N0).alpns(vec![ALPN.to_vec()]);
+    match relay {
+        Some(url) => builder.relay_mode(iroh::endpoint::RelayMode::custom([url.as_ref().clone()])),
+        None => builder,
+    }
+}
+
+pub(crate) fn target_endpoint_addr(peer: NodeId, relay: Option<&RelayUrl>) -> iroh::EndpointAddr {
+    let addr = iroh::EndpointAddr::new(peer.into());
+    match relay {
+        Some(url) => addr.with_relay_url(url.as_ref().clone()),
+        None => addr,
     }
 }
 
@@ -255,7 +311,7 @@ impl PeerTransport for IrohEndpoint {
     type Writer = iroh::endpoint::SendStream;
 
     async fn connect(&self, peer: &NodeId) -> AppResult<StreamParts<Self::Reader, Self::Writer>> {
-        self.connect_addr(*peer.as_ref()).await
+        self.connect_addr(self.target_addr(*peer)).await
     }
 
     async fn accept(&self) -> AppResult<(NodeId, StreamParts<Self::Reader, Self::Writer>)> {
@@ -516,6 +572,37 @@ mod tests {
             "not-an-endpoint-id".parse::<NodeId>(),
             Err(ConfigError::InvalidNodeId(_))
         ));
+    }
+
+    #[test]
+    fn relay_url_validates_and_builds_target_addr() {
+        let relay: RelayUrl = "https://relay.example.com:3340"
+            .parse()
+            .expect("valid https relay");
+        assert_eq!(relay.to_string(), "https://relay.example.com:3340/");
+
+        let http_relay: RelayUrl = "http://127.0.0.1:3340".parse().expect("valid http relay");
+        assert_eq!(http_relay.to_string(), "http://127.0.0.1:3340/");
+
+        let peer = NodeId::from(iroh::SecretKey::from([9; 32]).public());
+        let without_relay = target_endpoint_addr(peer, None);
+        assert_eq!(without_relay.relay_urls().count(), 0);
+
+        let with_relay = target_endpoint_addr(peer, Some(&relay));
+        assert_eq!(
+            with_relay.relay_urls().collect::<Vec<_>>(),
+            vec![relay.as_ref()]
+        );
+
+        for invalid in [
+            "",
+            "https://relay.example.com/bad path",
+            "ftp://relay.example.com",
+            "unix:/tmp/relay.sock",
+            "not-a-url",
+        ] {
+            assert!(invalid.parse::<RelayUrl>().is_err(), "{invalid:?}");
+        }
     }
 
     #[test]

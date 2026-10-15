@@ -7,7 +7,7 @@ use ssh_workspaces::{
         HostAlias, SshConfigEntry, default_ssh_config_path, disable_ssh_config_entry,
         install_service, uninstall_service, write_ssh_config_entry,
     },
-    connect::connect_stdio,
+    connect::{autoconnect, connect_stdio},
     listen::{BackendAddress, DEFAULT_BACKEND, Listener},
     shared::{AppError, AppResult, NodeId, RelayUrl, default_identity_path, load_node_id},
     trace::{format_trace_report, trace_node},
@@ -31,6 +31,8 @@ enum Command {
     Listen(ListenArgs),
     /// Bridge stdio to a worker iroh endpoint for OpenSSH ProxyCommand.
     Connect(ConnectArgs),
+    /// Run an interactive SSH session and automatically reconnect when the connection drops.
+    Autoconnect(AutoconnectArgs),
     /// Manage OpenSSH Host blocks (`enable`/`disable`) and the worker systemd service (`install`/`uninstall`).
     #[command(subcommand)]
     Config(ConfigCommand),
@@ -68,6 +70,21 @@ struct ConnectArgs {
     relay: Option<RelayUrl>,
 
     /// Emit iroh connection and byte-transfer diagnostics to stderr.
+    #[arg(long)]
+    trace: bool,
+}
+
+#[derive(Debug, Args)]
+struct AutoconnectArgs {
+    /// OpenSSH Host alias from `~/.ssh/config`.
+    #[arg(value_name = "HOST")]
+    host: HostAlias,
+
+    /// Optional remote command to run with a PTY (for example: `tmux new -A -s main`).
+    #[arg(value_name = "COMMAND")]
+    command: Option<String>,
+
+    /// Emit ssh invocation diagnostics to stderr.
     #[arg(long)]
     trace: bool,
 }
@@ -170,6 +187,7 @@ async fn run(cli: Cli) -> AppResult<i32> {
             connect_stdio(args.node_id, args.relay, args.trace).await?;
             Ok(0)
         }
+        Command::Autoconnect(args) => autoconnect(args.host, args.command, args.trace).await,
         Command::Config(command) => run_config(command).await,
         Command::Trace(args) => {
             let report = trace_node(args.node_id, args.relay).await?;
@@ -270,8 +288,9 @@ mod tests {
     }
 
     #[test]
-    fn parses_listen_defaults_and_trace() {
-        let cli = Cli::try_parse_from([
+    fn parses_listen_connect_trace_and_autoconnect() {
+        let node_id = sample_node_id();
+        let listen_cli = Cli::try_parse_from([
             "sshp",
             "listen",
             "--relay",
@@ -279,24 +298,22 @@ mod tests {
             "--trace",
         ])
         .expect("valid listen args");
-
-        let Command::Listen(args) = cli.command else {
+        let Command::Listen(listen_args) = listen_cli.command else {
             panic!("expected listen command");
         };
-
-        assert_eq!(args.backend, None);
+        assert_eq!(listen_args.backend, None);
         assert_eq!(
-            args.relay.as_ref().map(ToString::to_string).as_deref(),
+            listen_args
+                .relay
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
             Some("https://relay.example.com:3340/")
         );
-        assert!(!args.print_id);
-        assert!(args.trace);
-    }
+        assert!(!listen_args.print_id);
+        assert!(listen_args.trace);
 
-    #[test]
-    fn parses_connect_node_id_and_trace() {
-        let node_id = sample_node_id();
-        let cli = Cli::try_parse_from([
+        let connect_cli = Cli::try_parse_from([
             "sshp",
             "connect",
             &node_id,
@@ -305,17 +322,64 @@ mod tests {
             "--trace",
         ])
         .expect("valid connect args");
-
-        let Command::Connect(args) = cli.command else {
+        let Command::Connect(connect_args) = connect_cli.command else {
             panic!("expected connect command");
         };
-
-        assert_eq!(args.node_id.to_string(), node_id);
+        assert_eq!(connect_args.node_id.to_string(), node_id);
         assert_eq!(
-            args.relay.as_ref().map(ToString::to_string).as_deref(),
+            connect_args
+                .relay
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
             Some("http://127.0.0.1:3340/")
         );
-        assert!(args.trace);
+        assert!(connect_args.trace);
+
+        let auto_cli = Cli::try_parse_from([
+            "sshp",
+            "autoconnect",
+            "--trace",
+            "hanoi",
+            "tmux new -A -s work",
+        ])
+        .expect("valid autoconnect args");
+        let Command::Autoconnect(auto_args) = auto_cli.command else {
+            panic!("expected autoconnect command");
+        };
+        assert_eq!(auto_args.host.as_ref(), "hanoi");
+        assert_eq!(auto_args.command.as_deref(), Some("tmux new -A -s work"));
+        assert!(auto_args.trace);
+
+        let default_auto =
+            Cli::try_parse_from(["sshp", "autoconnect", "hanoi"]).expect("valid autoconnect host");
+        let Command::Autoconnect(default_args) = default_auto.command else {
+            panic!("expected autoconnect command");
+        };
+        assert_eq!(default_args.host.as_ref(), "hanoi");
+        assert_eq!(default_args.command, None);
+        assert!(!default_args.trace);
+
+        let trace_cli = Cli::try_parse_from([
+            "sshp",
+            "trace",
+            &node_id,
+            "--relay",
+            "https://relay.example.com",
+        ])
+        .expect("valid trace args");
+        let Command::Trace(trace_args) = trace_cli.command else {
+            panic!("expected trace command");
+        };
+        assert_eq!(trace_args.node_id.to_string(), node_id);
+        assert_eq!(
+            trace_args
+                .relay
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref(),
+            Some("https://relay.example.com/")
+        );
     }
 
     #[test]
@@ -336,11 +400,9 @@ mod tests {
             "--dry-run",
         ])
         .expect("valid config enable args");
-
         let Command::Config(ConfigCommand::Enable(args)) = cli.command else {
             panic!("expected config enable command");
         };
-
         assert_eq!(args.alias.as_ref(), "hanoi");
         assert_eq!(args.node_id.to_string(), node_id);
         assert_eq!(args.user.as_deref(), Some("giang"));
@@ -371,25 +433,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_ssh_config_path_with_dry_run_on_enable() {
+    fn parses_config_install_and_rejects_conflicting_flags() {
         let node_id = sample_node_id();
-        assert!(
-            Cli::try_parse_from([
-                "sshp",
-                "config",
-                "enable",
-                "hanoi",
-                &node_id,
-                "--dry-run",
-                "--ssh-config",
-                "/tmp/ssh_config",
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn parses_config_install_and_uninstall() {
         let install = Cli::try_parse_from([
             "sshp",
             "config",
@@ -416,46 +461,28 @@ mod tests {
             uninstall.command,
             Command::Config(ConfigCommand::Uninstall)
         ));
-    }
 
-    #[test]
-    fn parses_trace_command() {
-        let node_id = sample_node_id();
-        let cli = Cli::try_parse_from([
-            "sshp",
-            "trace",
-            &node_id,
-            "--relay",
-            "https://relay.example.com",
-        ])
-        .expect("valid trace args");
-
-        let Command::Trace(args) = cli.command else {
-            panic!("expected trace command");
-        };
-
-        assert_eq!(args.node_id.to_string(), node_id);
-        assert_eq!(
-            args.relay.as_ref().map(ToString::to_string).as_deref(),
-            Some("https://relay.example.com/")
-        );
-    }
-
-    #[test]
-    fn rejects_print_id_with_backend_or_relay_override() {
-        assert!(
-            Cli::try_parse_from(["sshp", "listen", "--print-id", "--backend", "127.0.0.1:22"])
-                .is_err()
-        );
-        assert!(
-            Cli::try_parse_from([
+        for invalid in [
+            vec![
+                "sshp",
+                "config",
+                "enable",
+                "hanoi",
+                &node_id,
+                "--dry-run",
+                "--ssh-config",
+                "/tmp/ssh_config",
+            ],
+            vec!["sshp", "listen", "--print-id", "--backend", "127.0.0.1:22"],
+            vec![
                 "sshp",
                 "listen",
                 "--print-id",
                 "--relay",
-                "https://relay.example.com"
-            ])
-            .is_err()
-        );
+                "https://relay.example.com",
+            ],
+        ] {
+            assert!(Cli::try_parse_from(invalid).is_err());
+        }
     }
 }

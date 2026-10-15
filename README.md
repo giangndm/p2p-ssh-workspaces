@@ -3,11 +3,12 @@
 `ssh-workspaces` (`sshp`) is a minimal Rust CLI that pipes standard OpenSSH
 connections over an iroh peer-to-peer stream.
 
-It exposes four subcommands:
+It exposes five subcommands:
 
 ```bash
 sshp listen
 sshp connect <node-id>
+sshp autoconnect <host> [command]
 sshp config <enable|disable|install|uninstall>
 sshp trace <node-id>
 ```
@@ -17,8 +18,10 @@ The listener forwards an incoming `sshp/1` iroh stream to a local `sshd`
 `sshp config disable` manage `Host <alias>` blocks in `~/.ssh/config` with
 `ProxyCommand`, allowing standard `ssh`, `scp`, `sftp`, `rsync`, Git, and IDE
 Remote-SSH workflows to connect transparently over iroh without any custom
-client config file. On the worker, `sshp config install` and
-`sshp config uninstall` manage the systemd user service.
+client config file. `sshp autoconnect <host> [command]` keeps interactive
+`tmux` or shell sessions connected across network changes and laptop sleep/wake
+cycles. On the worker, `sshp config install` and `sshp config uninstall` manage
+the systemd user service.
 
 ## Installation
 
@@ -71,6 +74,9 @@ scp file.txt hanoi:~/
 Other helpful commands:
 
 ```bash
+# Auto-reconnect an interactive tmux session across network changes or laptop sleep/wake:
+sshp autoconnect hanoi "tmux new -A -s work"
+
 # Probe P2P connectivity and measure handshake latency:
 sshp trace <worker-node-id>
 

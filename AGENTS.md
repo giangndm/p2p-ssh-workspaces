@@ -43,11 +43,12 @@ Never create merge commits (`--merge`).
 
 ## Required architecture
 
-Keep one binary with four top-level subcommands:
+Keep one binary with five top-level subcommands:
 
 ```text
 sshp listen
 sshp connect <node-id>
+sshp autoconnect <host> [command]
 sshp config <enable|disable|install|uninstall>
 sshp trace <node-id>
 ```
@@ -68,9 +69,10 @@ src/
 `shared` owns validated `NodeId`, default paths, the iroh ALPN, endpoint
 helpers, worker identity persistence, stream forwarding, atomic file writes, and
 shared errors. `listen` owns the worker accept loop, `BackendAddress`, and local
-backend bridge. `connect` owns the `ProxyCommand` stdio proxy. `config` owns
-OpenSSH `Host` block `enable`/`disable` updates in `~/.ssh/config` and systemd
-user-service `install`/`uninstall`. `trace` owns endpoint trace diagnostics.
+backend bridge. `connect` owns the `ProxyCommand` stdio proxy and the
+`autoconnect` reconnect supervisor loop. `config` owns OpenSSH `Host` block
+`enable`/`disable` updates in `~/.ssh/config` and systemd user-service
+`install`/`uninstall`. `trace` owns endpoint trace diagnostics.
 
 Do not introduce a custom TOML config file, plugin system, database, control
 plane, or SSH implementation. Private `AsyncRead`/`AsyncWrite` seams are
@@ -87,6 +89,11 @@ SSH.
 - `sshp connect <node-id>` bridges `stdin` and `stdout` directly to the worker's
   iroh stream for use in OpenSSH `ProxyCommand`. Diagnostics and `--trace`
   output go to `stderr` only.
+- `sshp autoconnect <host> [command]` runs an interactive `ssh` session with
+  `ServerAliveInterval=5` and `ServerAliveCountMax=2` (plus `-t` when a remote
+  command such as `tmux new -A -s main` is supplied) and automatically
+  reconnects with bounded backoff whenever `ssh` exits with transport disconnect
+  status `255`.
 - `sshp config enable <alias> <node-id>` renders or atomically updates a managed
   `Host <alias>` block in `~/.ssh/config`.
 - `sshp config disable <alias>` comments out `ProxyCommand` inside the managed

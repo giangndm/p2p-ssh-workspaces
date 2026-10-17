@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3](https://github.com/giangndm/ssh-over-iroh/compare/v0.1.2...v0.1.3) - 2026-10-17
+
+### Added
+
+- add sshp autoconnect subcommand for persistent interactive sessions
+
 ## [0.1.2](https://github.com/giangndm/ssh-over-iroh/compare/v0.1.1...v0.1.2) - 2026-10-15
 
 ### Added

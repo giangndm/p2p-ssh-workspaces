@@ -1,6 +1,6 @@
 [package]
 name = "ssh-workspaces"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2024"
 description = "P2P iroh pipe for OpenSSH"
 repository = "https://github.com/giangndm/ssh-over-iroh"
